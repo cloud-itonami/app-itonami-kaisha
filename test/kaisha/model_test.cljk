@@ -1,5 +1,5 @@
 (ns kaisha.model-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [kaisha.model :as k]
             [kaisha.validate :as v]))
 
