@@ -1,0 +1,12 @@
+{
+  "schema": "kaisha.vendor.pins.v1",
+  "source": "https://github.com/network-awai/app-itonami-egov/tree/2db4b704e22fd84fea3e898acd5730725e2b67dd",
+  "revision": "2db4b704e22fd84fea3e898acd5730725e2b67dd",
+  "license": "Apache-2.0",
+  "note": "判定ロジックと日本の制度パックは egov が正。ここで書き換えず、egov を直してから revision と sha256 を更新する。",
+  "files": {
+    "src/itonami/egov/core.cljc": "d9bbe2d4d8818debac63c111c9e35184ed626c6cde6f1ae489fb4d71211611df",
+    "seido/jp.edn": "8277259d897b266a06651e45485120a8704964f0f8f9c51f02359b93750bef28",
+    "LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+  }
+}

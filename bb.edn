@@ -1,4 +1,4 @@
-{:paths ["src" "test"]
+{:paths ["src" "vendor/egov/src" "test"]
  :tasks
  {test {:doc "全 test を実行する（失敗があれば exit 1）"
         :task (let [{:keys [fail error]} (do (require 'kaisha.core-test)

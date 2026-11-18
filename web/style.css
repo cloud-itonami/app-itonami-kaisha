@@ -165,3 +165,7 @@ button.settings-row,summary.settings-row{cursor:pointer}
 .dialog h2{font-size:1.125rem;font-weight:700;margin:0;line-height:1.4}
 .dialog p{font-size:.875rem;line-height:1.5}
 .dialog__actions{display:flex;justify-content:flex-end;gap:12px;flex-wrap:wrap}
+
+/* 行政手続き（Figma 行 4） */
+.align-start{align-self:flex-start}
+.check-row{display:flex;align-items:center;gap:12px;min-block-size:48px;font-size:.875rem;font-weight:500}

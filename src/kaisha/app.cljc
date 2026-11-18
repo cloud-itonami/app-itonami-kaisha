@@ -9,6 +9,7 @@
             [kaisha.company :as co]
             [kaisha.date :as d]
             [kaisha.meeting :as mt]
+            [kaisha.procedures :as proc]
             [kaisha.ringi :as ringi]))
 
 (def schema "itonami.kaisha.state.v1")
@@ -35,6 +36,7 @@
                :company/board? true
                :company/auditor? true
                :company/fy-end-month 3
+               :company/address {:country :jp :subdivision :jp.fixture/city-a}
                :company/agm-within-months 3
                :company/articles {:director-term-years 2 :auditor-term-years 4}
                :company/approval-policy ringi/default-policy
@@ -63,6 +65,7 @@
      :ringi []
      :financials {:fs/rows [] :fs/history []}
      :registrations []
+     :procedures []
      :audit []}))
 
 (defn find-by [k id xs] (some #(when (= id (get % k)) %) xs))
@@ -137,6 +140,23 @@
           :else (ok (update-in state [:company :company/members]
                                (fn [ms] (mapv #(if (= (:id ev) (:member/id %))
                                                  (assoc % :member/permissions (vec (sort perms))) %) ms))))))
+
+      :company/address
+      (let [{:keys [country subdivision]} (:address ev)]
+        (if (and country subdivision (proc/subdivision-name country subdivision))
+          (ok (assoc-in state [:company :company/address] {:country country :subdivision subdivision}))
+          (err state :unknown-subdivision)))
+
+      :procedure/head-office-move
+      (let [{:keys [to moved-on address-confirmed?]} ev]
+        (cond
+          (not (d/valid? moved-on)) (err state :missing-moved-on)
+          (nil? (:country to)) (err state :missing-destination)
+          (= to (:company/address c)) (err state :same-address)
+          :else (ok (update state :procedures (fnil conj [])
+                            {:procedure/id (:id ev) :procedure/kind :head-office-move :to to
+                             :moved-on moved-on :address-confirmed? (boolean address-confirmed?)
+                             :recorded-on on :recorded-by me}))))
 
       :meeting/add
       (let [m (:meeting ev)]
@@ -219,7 +239,8 @@
 
       :registration/add
       (if (and (seq (:title ev)) (d/valid? (:change-on ev)))
-        (ok (update state :registrations (fnil conj []) {:title (:title ev) :on (:change-on ev)}))
+        (ok (update state :registrations (fnil conj []) (cond-> {:title (:title ev) :on (:change-on ev)}
+                                                           (:kind ev) (assoc :kind (:kind ev)))))
         (err state :invalid-registration))
 
       :chat/post
@@ -260,4 +281,5 @@
 
 (defn valid-state? [s]
   (and (map? s) (= schema (:schema s)) (map? (:company s)) (map? (:space s))
+       (or (nil? (:procedures s)) (vector? (:procedures s)))
        (vector? (:meetings s)) (vector? (:ringi s))))

@@ -14,6 +14,7 @@
 | 稟議 | 社内規程による承認人数、起案者の自己承認の禁止、取締役会の決議が要る種類（重要な財産・多額の借財など）、締結できる代表者 | 349・362条4項 |
 | 会計 | 残高試算表（CSV）の取り込みと貸借の確認、計算書類の 作成 → 監査 → 取締役会の承認 → 定時総会の承認 → 公告 | 435・436・438・440条 |
 | 会話 | チャンネル、非公開チャンネル、1 段のスレッド、DM、メンション、既読 | — |
+| 行政手続き | 本店移転を記録すると、egov の制度パックから候補手続き（変更登記）・期限・提出先・出典・未収録の場合分けを出す。代表権が未確認・制度にない市町村・国をまたぐ移転・合同会社・見直し期限切れでは結論を出さずに止める | 915条（egov の日本パック） |
 | 設定 | 会社の基本・定款の定め（入力中に会社法の上限を確かめる）、役員の追加（変更登記の期限を予定に出す）、メンバーと権限 | 296・299・332・336・341・368・915条 |
 
 扱う会社は、株式会社（監査等委員会設置会社・指名委員会等設置会社を除く）と合同会社。
@@ -43,6 +44,8 @@
 | `vendor/awai-ui/` | awai-os `packages/awai-ui` の固定 revision の CSS・トークン・Noto Sans JP（OFL）。`PINS.json` の sha256 が変わるとビルドが止まる |
 | `scripts/build.mjs` | `dist/` を組み立て、`descriptor.json`（`kotoba.app.client-runtime.v1`、operations は空）と `release.json`（sha256）を書く |
 | `src-tauri/` | Tauri 3.0.0-alpha.6 の薄い host（yotei と同じ固定）。ネットワーク・ファイル・shell の権限は持たない |
+
+行政手続きの判定と制度パックは [app-itonami-egov](https://github.com/network-awai/app-itonami-egov) が正。`vendor/egov/` に revision と sha256 を固定して取り込み（`PINS.json`、test が照合）、ここでは書き換えない。直すときは egov を直してから固定を更新する。
 
 会計の帳簿は [kaikei](https://github.com/network-awai/app-itonami-kaikei) が持つ。Kaisha は作り直さず、試算表の残高だけを受け取る。
 会話の意味（スレッドは 1 段、DM の id は 2 人から決まる）は [kotoba-lang/app-itonami-kaisha](https://github.com/kotoba-lang/app-itonami-kaisha) の `kaisha.model` に合わせた。
