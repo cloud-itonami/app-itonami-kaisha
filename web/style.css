@@ -17,12 +17,16 @@ p{margin:0}
 .app-bar{display:flex;align-items:center;gap:12px;padding:12px 16px;position:sticky;inset-block-start:0;z-index:4;background:var(--awai-background)}
 .app-bar h1{font-size:1.125rem;font-weight:700;margin:0;line-height:1.4}
 .app-bar p{font-size:.75rem;color:var(--awai-muted);line-height:1.4}
-.app-bar__back{display:grid;place-items:center;inline-size:48px;block-size:48px;margin-inline-start:-12px;border:0;border-radius:999px;background:transparent;color:var(--awai-text);cursor:pointer}
+.icon-button{display:grid;place-items:center;inline-size:48px;block-size:48px;flex:none;border:0;border-radius:999px;background:transparent;color:var(--awai-text);cursor:pointer}
+.app-bar__back{margin-inline-start:-12px}
+.app-bar__text{flex:1;min-inline-size:0}
+.app-bar > .icon-button:last-child:not(.app-bar__back){margin-inline-end:-8px}
 
 /* icons: Figma から書き出した SVG を mask にして、文字色で塗る */
 .icon{display:inline-block;inline-size:24px;block-size:24px;background:currentColor;-webkit-mask:var(--icon) center/contain no-repeat;mask:var(--icon) center/contain no-repeat}
 .icon--calendar{--icon:url(icons/calendar.svg)} .icon--meeting{--icon:url(icons/meeting.svg)} .icon--approval{--icon:url(icons/approval.svg)}
 .icon--ledger{--icon:url(icons/ledger.svg)} .icon--chat{--icon:url(icons/chat.svg)} .icon--back{--icon:url(icons/back.svg)}
+.icon--settings{--icon:url(icons/settings.svg)} .icon--chevron{--icon:url(icons/chevron.svg)}
 
 /* Kaisha / Bottom tabs, Kaisha / Tab */
 .tabs{position:fixed;inset-inline:0;inset-block-end:0;z-index:5;display:flex;justify-content:space-between;padding:8px 16px calc(12px + env(safe-area-inset-bottom,0px));background:var(--awai-surface);border-block-start:1px solid var(--awai-border)}
@@ -131,3 +135,33 @@ textarea{inline-size:100%;font:inherit;color:var(--awai-text);background:var(--a
 .compose .awai-button{inline-size:96px;min-inline-size:96px}
 
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+/* 設定（Figma 行 3） */
+.section{display:flex;flex-direction:column;gap:8px}
+.section + .section{margin-block-start:6px}
+.settings-list{display:flex;flex-direction:column}
+.settings-row{display:flex;align-items:center;gap:12px;inline-size:100%;min-block-size:56px;padding:12px 0;border:0;border-block-end:1px solid var(--awai-border);background:transparent;color:var(--awai-text);font:inherit;text-align:start;cursor:default}
+button.settings-row,summary.settings-row{cursor:pointer}
+.settings-row__text{flex:1;display:flex;flex-direction:column;gap:2px;min-inline-size:0}
+.settings-row__title{font-size:.875rem;font-weight:500}
+.settings-row__detail{font-size:.75rem;color:var(--awai-muted);overflow-wrap:anywhere}
+.settings-row-detail > summary{list-style:none}
+.settings-row-detail > summary::-webkit-details-marker{display:none}
+.settings-row-detail[open] > summary .icon--chevron{transform:rotate(90deg)}
+.settings-row-detail > .form{padding-block:8px 12px}
+.choice{border:0;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.choice legend{padding:0;margin-block-end:6px}
+.segment-radio{position:relative}
+.segment-radio input{position:absolute;opacity:0;inline-size:1px;block-size:1px}
+.segment-radio .segment{display:inline-flex;align-items:center}
+.segment-radio input:checked + .segment{background:var(--awai-container);color:var(--awai-primary);font-weight:700}
+.segment-radio input:focus-visible + .segment{outline:3px solid var(--awai-primary);outline-offset:2px}
+.field-group{display:flex;flex-direction:column;gap:6px}
+.problem{color:var(--awai-error)}
+.problem:empty{display:none}
+.awai-button:disabled{cursor:default}
+.scrim{position:fixed;inset:0;z-index:10;display:grid;place-items:center;padding:24px;background:color-mix(in srgb,var(--awai-text) 40%,transparent)}
+.dialog{inline-size:min(100%,420px);display:flex;flex-direction:column;gap:12px;padding:24px;border-radius:16px;background:var(--awai-background)}
+.dialog h2{font-size:1.125rem;font-weight:700;margin:0;line-height:1.4}
+.dialog p{font-size:.875rem;line-height:1.5}
+.dialog__actions{display:flex;justify-content:flex-end;gap:12px;flex-wrap:wrap}

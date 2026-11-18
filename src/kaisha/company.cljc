@@ -3,7 +3,8 @@
 
   対象は株式会社（監査等委員会設置会社・指名委員会等設置会社を除く）と合同会社。
   それ以外の形態や機関設計は :undetermined を返し、推測で埋めない。"
-  (:require [kaisha.date :as d]))
+  (:require [clojure.string :as str]
+            [kaisha.date :as d]))
 
 (def supported-forms #{:kk :godo})
 
@@ -52,7 +53,37 @@
 
       (and (:shareholder-notice-days arts)
            (or (:company/public? c) (:company/board? c)))
-      (conj (problem :error :notice-shortening-not-allowed :source :kaisha/a299)))))
+      (conj (problem :error :notice-shortening-not-allowed :source :kaisha/a299))
+
+      (and (some? (:board-notice-days arts))
+           (not (and (integer? (:board-notice-days arts)) (<= 1 (:board-notice-days arts) 7))))
+      (conj (problem :error :board-notice-out-of-range :source :kaisha/a368))
+
+      (some (fn [k] (let [q (get-in arts [:quorum k])]
+                      (or (= q :none)
+                          (and (vector? q) (< (* 3 (first q)) (second q))))))
+            [:officer :special])
+      (conj (problem :error :quorum-below-one-third :source :kaisha/a341))
+
+      (str/blank? (:company/name c))
+      (conj (problem :error :missing-name)))))
+
+(def officer-roles-by-form
+  {:kk #{:director :representative-director :auditor}
+   :godo #{:representative-member :executive-member}})
+
+(defn officer-problems
+  "役員を加える前の確認。返り値は problem の列（空なら追加できる）。"
+  [c o]
+  (let [roles (set (:officer/roles o))
+        allowed (officer-roles-by-form (:company/form c))]
+    (cond-> []
+      (str/blank? (:officer/id o)) (conj (problem :error :missing-id))
+      (some #(= (:officer/id o) (:officer/id %)) (:company/officers c)) (conj (problem :error :duplicate-officer))
+      (str/blank? (:officer/name o)) (conj (problem :error :missing-name))
+      (or (empty? roles) (not (every? allowed roles))) (conj (problem :error :invalid-role))
+      (and (roles :auditor) (not (:company/auditor? c))) (conj (problem :error :no-auditor-seat))
+      (not (d/valid? (:officer/elected-on o))) (conj (problem :error :missing-election-date)))))
 
 (defn term-years
   "役員の任期（年）。定款の定めがなければ法定（取締役 2 年、監査役 4 年）。"

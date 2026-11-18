@@ -33,7 +33,7 @@ await mkdir(out, {recursive: true});
 await copyFile(resolve(root, 'target/app/main.js'), resolve(out, 'main.js'));
 await copyFile(resolve(root, 'web/index.html'), resolve(out, 'index.html'));
 await copyFile(resolve(root, 'web/style.css'), resolve(out, 'style.css'));
-const icons = ['calendar', 'meeting', 'approval', 'ledger', 'chat', 'back'];
+const icons = ['calendar', 'meeting', 'approval', 'ledger', 'chat', 'back', 'settings', 'chevron'];
 await mkdir(resolve(out, 'icons'), {recursive: true});
 for (const i of icons) await copyFile(resolve(root, `web/icons/${i}.svg`), resolve(out, `icons/${i}.svg`));
 await writeFile(resolve(out, 'awai-ui.css'), awaiCss);

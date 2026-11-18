@@ -3,7 +3,8 @@
 
   状態は端末の中だけにある。外部への送信・提出・署名はしない（descriptor の operations は空）。
   受け付けた操作は :audit に残す（誰が・いつ・何を）。"
-  (:require [kaisha.books :as books]
+  (:require [clojure.string :as str]
+            [kaisha.books :as books]
             [kaisha.chat :as chat]
             [kaisha.company :as co]
             [kaisha.date :as d]
@@ -11,6 +12,10 @@
             [kaisha.ringi :as ringi]))
 
 (def schema "itonami.kaisha.state.v1")
+
+(def member-permissions
+  "社内の権限。代表権（会社法 349条）とは別で、代表権の証明にならない。"
+  #{:approve :post})
 
 (defn sample
   "初回に表示する架空の会社。実在の会社・人物ではない。"
@@ -101,6 +106,37 @@
                        (fn [os] (mapv #(if (= (:id ev) (:officer/id %))
                                          (assoc % :officer/authority-verified-on on) %) os))))
         (err state :unknown-officer))
+
+      :officer/add
+      (let [o (select-keys (:officer ev) [:officer/id :officer/name :officer/roles :officer/elected-on])
+            problems (co/officer-problems c o)]
+        (if (seq problems)
+          (err state :invalid-officer :problems (vec problems))
+          (ok (-> state
+                  (update-in [:company :company/officers] conj (update o :officer/roles vec))
+                  ;; 役員の就任は登記事項の変更なので、2 週間以内の変更登記を予定に出す（915条）
+                  (update :registrations (fnil conj [])
+                          {:title (str (:officer/name o) " の就任") :on (:officer/elected-on o)})))))
+
+      :member/add
+      (let [m (:member ev)
+            perms (set (:member/permissions m))]
+        (cond
+          (or (str/blank? (:member/id m)) (str/blank? (:member/name m))) (err state :invalid-member)
+          (find-by :member/id (:member/id m) (:company/members c)) (err state :duplicate-member)
+          (not (every? member-permissions perms)) (err state :invalid-permission)
+          :else (ok (update-in state [:company :company/members] conj
+                               {:member/id (:member/id m) :member/name (:member/name m)
+                                :member/permissions (vec (sort perms))}))))
+
+      :member/set-permissions
+      (let [perms (set (:permissions ev))]
+        (cond
+          (not (find-by :member/id (:id ev) (:company/members c))) (err state :unknown-member)
+          (not (every? member-permissions perms)) (err state :invalid-permission)
+          :else (ok (update-in state [:company :company/members]
+                               (fn [ms] (mapv #(if (= (:id ev) (:member/id %))
+                                                 (assoc % :member/permissions (vec (sort perms))) %) ms))))))
 
       :meeting/add
       (let [m (:meeting ev)]
@@ -219,7 +255,8 @@
       (update-in res [:state :audit] (fnil conj [])
                  {:at (or (:at ev) (:on ev)) :actor (:me state) :type (:type ev)
                   :target (or (:id ev) (:channel ev) (get-in ev [:ringi :ringi/id])
-                              (get-in ev [:meeting :meeting/id]))}))))
+                              (get-in ev [:meeting :meeting/id]) (get-in ev [:officer :officer/id])
+                              (get-in ev [:member :member/id]))}))))
 
 (defn valid-state? [s]
   (and (map? s) (= schema (:schema s)) (map? (:company s)) (map? (:space s))
