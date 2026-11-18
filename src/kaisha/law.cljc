@@ -149,6 +149,14 @@
     :in-force-from "2026-08-12"
     :retrieved-on "2026-11-18"
     :sha256 "48bdca4c76f3685e4463760d511a9cb9aae5d5c981d6b4ee03b57501aab6321a"}
+   :hojinbango-shoureki/a2
+   {:title "法人番号の指定等に関する省令 第2条（検査用数字を算出する算式）"
+    :url "https://laws.e-gov.go.jp/law/426M60000040070"
+    :api "https://laws.e-gov.go.jp/api/2/law_data/426M60000040070?law_full_text_format=json&elm=MainProvision-Article_2"
+    :law-revision-id "426M60000040070_20210401_503M60000040019"
+    :in-force-from "2021-04-01"
+    :retrieved-on "2026-11-18"
+    :sha256 "f6b95b06e7919c9d6cd477987617f74523f7ca4002e7aad72da86ee99227ae32"}
    :hojinzei/a74
    {:title "法人税法 第74条（確定申告）"
     :url "https://laws.e-gov.go.jp/law/340AC0000000034"

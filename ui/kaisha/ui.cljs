@@ -11,6 +11,7 @@
             [kaisha.date :as d]
             [kaisha.deadlines :as dl]
             [kaisha.i18n :as i18n]
+            [kaisha.identity :as idn]
             [kaisha.law :as law]
             [kaisha.meeting :as mt]
             [kaisha.procedures :as proc]
@@ -81,7 +82,7 @@
       el)
     :else (.createTextNode js/document (str x))))
 
-(declare render! procedures-section settings-row)
+(declare render! procedures-section settings-row section)
 
 (defn- act!
   "操作を適用する。拒まれたら理由を画面に出し、状態は変えない。成功なら true。"
@@ -667,7 +668,8 @@
        (when (= :withheld-unreviewed-pack (:submission-proposal plan))
          (banner :info (t :proc/withheld-title) (t :proc/withheld-body)))
        (card [:div {:class "card__head"} [:strong (t :proc/efiling)] (chip :neutral (t :proc/preparing))]
-             (caption (t :proc/efiling-body)))
+             (caption (t :proc/efiling-body))
+             [:button {:class "awai-button awai-button--text align-start" :type "button" :on-click #(go! :screen :identity)} (t :identity/open)])
        (if added?
          (caption (t :proc/deadline-added) "text")
          (btn :tonal (t :proc/add-deadline)
@@ -700,6 +702,21 @@
                 [:option {:value (str (namespace id) "/" (name id)) :selected (= id (:subdivision addr))} nm])] "▾")
       (caption (t :address/note))]
      (btn :primary (t :common/save) nil {:type "submit"})]))
+
+;; ---------------------------------------------------------------- 本人確認と電子申請（X1、AWAI-3483）
+
+(defn- service-row [{:keys [id status requirements]}]
+  (let [reqs (remove #(= "" %) (map #(t (keyword "req" (name %))) requirements))]
+    (settings-row (t (keyword "service" (str (namespace id) "-" (name id))))
+                  (str/join " · " (cons (t (keyword "identity" (str "status-" (name status)))) reqs))
+                  nil)))
+
+(defn- identity-view []
+  (list
+   (banner :info (t :identity/no-mynumber-title) (t :identity/no-mynumber-body))
+   (section (t :identity/japan) [:div {:class "settings-list"} (map service-row (idn/by-country :jp))])
+   (section (t :identity/other) [:div {:class "settings-list"} (map service-row (remove #(= :jp (:country %)) idn/services))])
+   (caption (t :identity/consent-note))))
 
 ;; ---------------------------------------------------------------- 設定（U1〜U5・V1〜V3、AWAI-3449）
 
@@ -740,7 +757,8 @@
 (def ^:private problem-field
   {:director-term-out-of-range "director" :auditor-term-out-of-range "auditor"
    :notice-shortening-not-allowed "shareholder" :board-notice-out-of-range "board"
-   :quorum-below-one-third "officer-quorum" :missing-name "name"})
+   :quorum-below-one-third "officer-quorum" :missing-name "name"
+   :invalid-corporate-number "corporate-number"})
 
 (defn- show-problems!
   "入力中の誤りを Banner と項目の下の文に出し、誤りがあれば保存ボタンを無効にする。"
@@ -757,6 +775,7 @@
 
 (defn- company-patch [^js fd]
   {:company/name (str/trim (or (.get fd "name") ""))
+   :company/corporate-number (let [v (str/replace (or (.get fd "corporate-number") "") #"[\s-]" "")] (when-not (str/blank? v) v))
    :company/form (keyword (.get fd "form"))
    :company/public? (= "yes" (.get fd "public"))
    :company/board? (= "yes" (.get fd "board"))
@@ -846,6 +865,7 @@
                              nil)])
      (section (t :settings/procedures)
               [:div {:class "settings-list"}
+               (settings-row (t :identity/title) (t :identity/row-detail) #(go! :screen :identity))
                (settings-row (t :settings/row-address) (place-name (:company/address c)) #(go! :screen :address))])
      (section (t :settings/law)
               [:div {:class "chips"} (chip :info (t :app/review))]
@@ -860,6 +880,10 @@
     (live-form (fn [_ fd] (company-patch fd))
                [(field (t :company/name) [:input {:name "name" :value (:company/name c) :required true}])
                 (problem-slot "name")
+                [:div {:class "field-group"}
+                 (field (t :company/corporate-number) [:input {:name "corporate-number" :inputmode "numeric" :maxlength 13 :autocomplete "off" :value (:company/corporate-number c)}])
+                 (problem-slot "corporate-number")
+                 (caption (t :company/corporate-number-note))]
                 (choice "form" (t :company/form) [[:kk (t :form/kk)] [:godo (t :form/godo)]] (:company/form c) (t :company/form-note))
                 (choice "public" (t :company/public) [[:no (t :no)] [:yes (t :yes)]] (if (:company/public? c) :yes :no) (t :company/public-note))
                 (yn "board" (t :company/board) (:company/board? c))
@@ -969,6 +993,7 @@
    :officers {:title :settings/row-officers :parent :settings}
    :members {:title :settings/row-members :parent :settings}
    :address {:title :settings/row-address :parent :settings}
+   :identity {:title :identity/title :parent :settings}
    :move {:title :proc/move-title :subtitle :proc/move-subtitle :parent nil}
    :procedure {:title :proc/candidates-title :parent nil}})
 
@@ -1029,6 +1054,7 @@
         :officers (officers-view)
         :members (members-view)
         :address (address-view)
+        :identity (identity-view)
         :move (move-view)
         :procedure (procedure-view)
         (if a

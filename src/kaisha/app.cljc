@@ -31,6 +31,7 @@
      :me "ito"
      :company {:company/id "fixture-kk"
                :company/name "架空商事株式会社"
+               :company/corporate-number "7123456789012"
                :company/form :kk
                :company/public? false
                :company/board? true

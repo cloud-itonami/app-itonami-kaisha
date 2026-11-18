@@ -4,7 +4,8 @@
   対象は株式会社（監査等委員会設置会社・指名委員会等設置会社を除く）と合同会社。
   それ以外の形態や機関設計は :undetermined を返し、推測で埋めない。"
   (:require [clojure.string :as str]
-            [kaisha.date :as d]))
+            [kaisha.date :as d]
+            [kaisha.identity :as idn]))
 
 (def supported-forms #{:kk :godo})
 
@@ -66,7 +67,11 @@
       (conj (problem :error :quorum-below-one-third :source :kaisha/a341))
 
       (str/blank? (:company/name c))
-      (conj (problem :error :missing-name)))))
+      (conj (problem :error :missing-name))
+
+      (and (some? (:company/corporate-number c))
+           (not (idn/corporate-number-valid? (:company/corporate-number c))))
+      (conj (problem :error :invalid-corporate-number :source :hojinbango-shoureki/a2)))))
 
 (def officer-roles-by-form
   {:kk #{:director :representative-director :auditor}

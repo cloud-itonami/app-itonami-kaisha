@@ -2,5 +2,5 @@
  :aliases
  {:test {:extra-paths ["test"]
          :main-opts ["-e" "(require 'kaisha.core-test) (let [{:keys [fail error]} (clojure.test/run-tests 'kaisha.core-test)] (System/exit (if (zero? (+ fail error)) 0 1)))"]}
-  :ui {:extra-paths ["ui"]
+  :ui {:extra-paths ["ui" "test"]
        :extra-deps {thheller/shadow-cljs {:mvn/version "3.5.13"}}}}}

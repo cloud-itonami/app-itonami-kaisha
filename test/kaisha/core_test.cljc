@@ -8,6 +8,7 @@
             [kaisha.i18n]
             [kaisha.deadlines :as dl]
             [kaisha.law :as law]
+            [kaisha.identity :as idn]
             [kaisha.meeting :as mt]
             [kaisha.procedures :as proc]
             [kaisha.ringi :as ringi]))
@@ -302,11 +303,36 @@
                digest (.digest (java.security.MessageDigest/getInstance "SHA-256") bytes)]
            (is (= sha (apply str (map #(format "%02x" %) digest))) f))))))
 
+(deftest identity-integration
+  (testing "法人番号の検査用数字（省令 第2条）: 国税庁の法人番号 7000012050002 で確かめる"
+    (is (idn/corporate-number-valid? "7000012050002"))
+    (is (idn/corporate-number-valid? "7123456789012") "架空の会社の番号も検査用数字が合う")
+    (is (not (idn/corporate-number-valid? "8000012050002")) "検査用数字が違う")
+    (is (not (idn/corporate-number-valid? "000012050002")) "12 桁（個人番号の桁数）は受け付けない")
+    (is (not (idn/corporate-number-valid? "70000120500a2")))
+    (is (not (idn/corporate-number-valid? nil))))
+  (testing "会社の設定で法人番号を確かめる"
+    (is (some #{:invalid-corporate-number} (map :code (co/validate (assoc c :company/corporate-number "7123456789013")))))
+    (is (some #{:invalid-corporate-number} (map :code (co/validate (assoc c :company/corporate-number "123456789012")))))
+    (is (not-any? #{:invalid-corporate-number} (map :code (co/validate (dissoc c :company/corporate-number))))))
+  (testing "個人番号はどの仕組みでも扱わない"
+    (is (not-any? #(some idn/never-handled (:data %)) idn/services))
+    (is (not-any? #(some idn/never-handled (:data-categories %)) (idn/operations))))
+  (testing "外部操作の宣言は形が正しく、broker が確認できるまで有効にならない"
+    (is (seq (idn/operations)))
+    (is (every? empty? (map idn/operation-problems (idn/operations))))
+    (is (= [:origin-not-https :consent-not-each-operation]
+           (idn/operation-problems {:origin "http://x.example" :method "GET" :path "/a" :query-names #{} :consent :batch})))
+    (is (= [:handles-individual-number] (idn/operation-problems {:origin "https://x.example" :method "GET" :path "/a" :query-names #{} :consent :each-operation :data-categories #{:individual-number}})))
+    (is (false? idn/broker-available?))
+    (is (= [] (idn/enabled-operations)))
+    (is (every? false? (map :enabled (idn/operations))))))
+
 (deftest i18n-complete
   (is (= {:ja-only [] :en-only []} (kaisha.i18n/missing-keys))))
 
 (defn- evidence-file [id]
-  (let [[_ law art] (re-matches #"(kaisha|hojinzei)/a(\d+)" (subs (str id) 1))]
+  (let [[_ law art] (re-matches #"(kaisha|hojinzei|hojinbango-shoureki)/a(\d+)" (subs (str id) 1))]
     (str "docs/evidence/egov-20261118/" law "-" art ".json")))
 
 (deftest law-sources

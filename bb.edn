@@ -4,6 +4,9 @@
         :task (let [{:keys [fail error]} (do (require 'kaisha.core-test)
                                              (clojure.test/run-tests 'kaisha.core-test))]
                 (System/exit (if (zero? (+ fail error)) 0 1)))}
+  test-cljs {:doc "同じ test を ClojureScript（node）で実行する（JVM で shadow-cljs を使う）"
+             :task (do (shell "clojure -M:ui -m shadow.cljs.devtools.cli compile test")
+                       (shell "node target/test/test.cjs"))}
   ui {:doc "画面の JS をビルドする（JVM で shadow-cljs）"
       :task (do (babashka.fs/delete-tree "target") (babashka.fs/delete-tree ".shadow-cljs")
                 (shell "clojure -M:ui -m shadow.cljs.devtools.cli release app"))}}}
