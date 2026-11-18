@@ -13,6 +13,7 @@
             [kaisha.i18n :as i18n]
             [kaisha.law :as law]
             [kaisha.meeting :as mt]
+            [kaisha.procedures :as proc]
             [kaisha.ringi :as ringi]))
 
 (def storage-key "itonami.kaisha.state.v1")
@@ -80,7 +81,7 @@
       el)
     :else (.createTextNode js/document (str x))))
 
-(declare render!)
+(declare render! procedures-section settings-row)
 
 (defn- act!
   "操作を適用する。拒まれたら理由を画面に出し、状態は変えない。成功なら true。"
@@ -203,6 +204,7 @@
        (field (t :home/registration-title) [:input {:name "title" :required true}])
        (field (t :home/registration-on) [:input {:name "on" :type "date" :required true}])
        (btn :primary (t :common/add) nil {:type "submit"})]]
+     (procedures-section)
      (h2 (t :home/officers))
      (map officer-card (get-in s [:company :company/officers])))))
 
@@ -581,6 +583,124 @@
          [:span {:class "compose__input"} [:input {:name "body" :required true :placeholder (t :chat/placeholder-short)}]]
          (btn :primary (t :chat/send) nil {:type "submit"})])))))
 
+;; ---------------------------------------------------------------- 行政手続き（W1〜W4、AWAI-3482）
+
+(defn- place-name [{:keys [country subdivision]}]
+  (or (proc/subdivision-name country subdivision) (t :proc/not-set)))
+
+(defn- source-short [title] (let [i (.indexOf title "（")] (if (pos? i) (subs title 0 i) title)))
+
+(defn- procedures-section []
+  (let [moves (:procedures @state)]
+    (list
+     (h2 (t :proc/heading))
+     (when (seq moves)
+       [:div {:class "settings-list"}
+        (for [mv (reverse moves)]
+          (settings-row (t :proc/move-row {:to (place-name (:to mv))})
+                        (t :proc/move-row-detail {:date (:moved-on mv)})
+                        #(go! :screen :procedure :procedure (:procedure/id mv))))])
+     [:button {:class "awai-button awai-button--text align-start" :type "button" :on-click #(go! :screen :move)}
+      (t :proc/record-move)])))
+
+(defn- move-view []
+  (let [c (:company @state)
+        from (:company/address c)
+        country (or (:country from) :jp)
+        options (remove #(= (first %) (:subdivision from)) (proc/subdivisions country))]
+    [:form {:class "form"
+            :on-submit (fn [^js e]
+                         (.preventDefault e)
+                         (let [fd (js/FormData. (.-target e))
+                               id (str "p-" (now))]
+                           (when (act! {:type :procedure/head-office-move :id id
+                                        :to {:country country :subdivision (keyword (.get fd "to"))}
+                                        :moved-on (.get fd "moved-on")
+                                        :address-confirmed? (= "yes" (.get fd "confirmed"))})
+                             (go! :screen :procedure :procedure id))))}
+     (stat (t :proc/from) (place-name from))
+     [:div {:class "field-group"}
+      (field (t :proc/to) [:select {:name "to" :required true}
+                           (for [[id nm] options] [:option {:value (str (namespace id) "/" (name id))} nm])] "▾")
+      (caption (t :proc/to-note))]
+     (field (t :proc/moved-on) [:input {:name "moved-on" :type "date" :required true}])
+     [:label {:class "check-row"} [:input {:type "checkbox" :name "confirmed" :value "yes"}] (t :proc/confirm-address)]
+     (btn :primary (t :proc/plan) nil {:type "submit"})
+     (caption (t :proc/move-note))]))
+
+(defn- reason-key [reason]
+  (cond
+    (#{:unknown-subdivision :subdivision-required :unsupported-jurisdiction :jurisdiction-missing} reason) "not-in-pack"
+    (has-msg? (keyword "proc" (str "reason-title-" (name reason)))) (name reason)
+    :else "other"))
+
+(defn- candidate-card [cand]
+  (let [{:keys [deadline submit-to sources unknowns]} cand
+        reg (:registry-office-for submit-to)]
+    (card
+     [:strong {:class "card__title"} (:procedure/title cand)]
+     [:div {:class "stats-row"}
+      (stat (t :proc/due) (case (:kind deadline)
+                            :within-days (t :proc/due-value {:date (:due deadline)})
+                            :before (t :proc/before {:date (:due-before deadline)})
+                            "—"))
+      (when (= :within-days (:kind deadline)) (stat (t :proc/count) (t :proc/within-days {:days (:days deadline)})))]
+     (cond
+       reg (caption (t :proc/submit-to-registry {:name (place-name {:country :jp :subdivision reg})}) "text")
+       (map? submit-to) (caption (t :proc/submit-to {:name (or (:name submit-to) "—")}) "text"))
+     (for [src sources] (caption (t :common/source-inline {:law (source-short (:title src))})))
+     (when (seq unknowns)
+       [:div {:class "chips"}
+        (for [u unknowns :let [k (keyword "proc" (str "unknown-" (name u)))]]
+          (chip :warning (if (has-msg? k) (t k) (name u))))]))))
+
+(defn- procedure-view []
+  (let [s @state c (:company s)
+        mv (app/find-by :procedure/id (:procedure @ui) (:procedures s))
+        plan (when mv (proc/head-office-move-plan c mv (today)))
+        added? (some #(and (= (:on %) (:moved-on mv)) (= (:kind %) :head-office-move)) (:registrations s))]
+    (case (:status plan)
+      :candidates
+      (list
+       [:div {:class "chips"} (chip :neutral (t :proc/candidate)) (when (not= :reviewed (get-in plan [:pack :review])) (chip :info (t :app/review)))]
+       (map candidate-card (:candidates plan))
+       (when (= :withheld-unreviewed-pack (:submission-proposal plan))
+         (banner :info (t :proc/withheld-title) (t :proc/withheld-body)))
+       (card [:div {:class "card__head"} [:strong (t :proc/efiling)] (chip :neutral (t :proc/preparing))]
+             (caption (t :proc/efiling-body)))
+       (if added?
+         (caption (t :proc/deadline-added) "text")
+         (btn :tonal (t :proc/add-deadline)
+              #(act! {:type :registration/add :title (t :proc/move-row {:to (place-name (:to mv))})
+                      :change-on (:moved-on mv) :kind :head-office-move})))
+       (caption (t :proc/note)))
+      (let [k (reason-key (:reason plan))
+            tone (if (= :blocked (:status plan)) :error :info)]
+        (list
+         (banner tone (t (keyword "proc" (str "reason-title-" k)))
+                 (t (keyword "proc" (str "reason-body-" k)) {:review (:review-by plan) :code (some-> (:reason plan) name)}))
+         (when (= :representative-unconfirmed (:reason plan))
+           (btn :tonal (t :proc/open-officers) #(go! :screen :officers)))
+         (when (= tone :info) (caption (t :proc/stopped-note))))))))
+
+(defn- address-view []
+  (let [c (:company @state)
+        addr (:company/address c)]
+    [:form {:class "form"
+            :on-submit (fn [^js e]
+                         (.preventDefault e)
+                         (let [v (.get (js/FormData. (.-target e)) "subdivision")]
+                           (when (act! {:type :company/address :address {:country :jp :subdivision (keyword v)}})
+                             (go! :screen :settings))))}
+     (stat (t :address/country) (t :address/japan))
+     [:div {:class "field-group"}
+      (field (t :address/municipality)
+             [:select {:name "subdivision"}
+              (for [[id nm] (proc/subdivisions :jp)]
+                [:option {:value (str (namespace id) "/" (name id)) :selected (= id (:subdivision addr))} nm])] "▾")
+      (caption (t :address/note))]
+     (btn :primary (t :common/save) nil {:type "submit"})]))
+
 ;; ---------------------------------------------------------------- 設定（U1〜U5・V1〜V3、AWAI-3449）
 
 (defn- app-bar [{:keys [title subtitle on-back on-settings]}]
@@ -724,6 +844,9 @@
                                                (if up-to (t :settings/policy-up-to {:amount (yen up-to) :n approvers})
                                                    (t :settings/policy-above {:n approvers}))))
                              nil)])
+     (section (t :settings/procedures)
+              [:div {:class "settings-list"}
+               (settings-row (t :settings/row-address) (place-name (:company/address c)) #(go! :screen :address))])
      (section (t :settings/law)
               [:div {:class "chips"} (chip :info (t :app/review))]
               (caption (t :settings/law-detail {:n (count law/sources) :date (:pack/checked-on law/pack) :review (:pack/review-by law/pack)})))
@@ -844,7 +967,10 @@
    :company {:title :settings/row-company :parent :settings}
    :articles {:title :settings/row-articles :parent :settings}
    :officers {:title :settings/row-officers :parent :settings}
-   :members {:title :settings/row-members :parent :settings}})
+   :members {:title :settings/row-members :parent :settings}
+   :address {:title :settings/row-address :parent :settings}
+   :move {:title :proc/move-title :subtitle :proc/move-subtitle :parent nil}
+   :procedure {:title :proc/candidates-title :parent nil}})
 
 (defn- reset-dialog []
   [:div {:class "scrim" :on-keydown #(when (= "Escape" (.-key %)) (go! :confirm-reset false))}
@@ -880,7 +1006,11 @@
     [:div {:class "shell" :inert confirm?}
      (cond
        screen (app-bar {:title (t (get-in screens [screen :title]))
-                        :subtitle (if (= screen :settings) (get-in s [:company :company/name]) (t :settings/title))
+                        :subtitle (cond (= screen :settings) (get-in s [:company :company/name])
+                                        (= screen :procedure) (t :proc/candidates-subtitle
+                                                                 {:date (:moved-on (app/find-by :procedure/id (:procedure @ui) (:procedures s)))})
+                                        (get-in screens [screen :subtitle]) (t (get-in screens [screen :subtitle]))
+                                        :else (t :settings/title))
                         :on-back #(go! :screen (get-in screens [screen :parent]))})
        a (app-bar {:title (:meeting/title m) :subtitle (matter-label (:meeting/body m) (:agenda/matter a))
                    :on-back #(go! :vote nil)})
@@ -898,6 +1028,9 @@
         :articles (articles-view)
         :officers (officers-view)
         :members (members-view)
+        :address (address-view)
+        :move (move-view)
+        :procedure (procedure-view)
         (if a
           (vote-view)
           (case (:tab @ui)

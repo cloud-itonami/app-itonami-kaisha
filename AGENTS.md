@@ -7,3 +7,5 @@ Follow the workspace-level AGENTS.md (Kotoba end-user app contract, Linear track
 - The app sends nothing: `descriptor.json` declares no operations and the CSP allows no network. Any future external operation (AwaiFS, e-Gov, kaikei) must go through the canonical kotoba-client-runtime broker with per-operation consent; never add an app-local approval UI or proxy.
 - Internal roles never prove representative authority. Keep `:unverified` until the register has been checked.
 - Run `bb test` (and `clojure -M:test`) before every commit. Check Japanese and English at phone width.
+- Government-procedure rules and rule packs come from network-awai/app-itonami-egov, vendored at a pinned revision in `vendor/egov/` (sha256 in `PINS.json`, checked by tests). Never edit the vendored files here; fix egov first, then update the pin. Kaisha only maps its company and officer records onto egov inputs (`kaisha.procedures`).
+- Never read, request or store the 12-digit individual number (My Number). Identity and signing use card certificates only (owner decision 2026-11-18).

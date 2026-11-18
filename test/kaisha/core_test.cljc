@@ -9,6 +9,7 @@
             [kaisha.deadlines :as dl]
             [kaisha.law :as law]
             [kaisha.meeting :as mt]
+            [kaisha.procedures :as proc]
             [kaisha.ringi :as ringi]))
 
 (def c (:company (app/sample)))
@@ -259,6 +260,47 @@
         (is (some #{:quorum-below-one-third} (map :code (:problems (set-arts {:quorum {:officer [1 4]}})))))
         (is (some #{:board-notice-out-of-range} (map :code (:problems (set-arts {:board-notice-days 0})))))
         (is (nil? (:error (set-arts {:director-term-years 10 :board-notice-days 5 :quorum {:officer [1 3] :ordinary :none}}))))))))
+
+(deftest procedures
+  (let [s (app/sample)
+        c (:company s)
+        verified (assoc-in c [:company/officers 0 :officer/authority-verified-on] "2026-11-18")
+        move {:to {:country :jp :subdivision :jp.fixture/city-b} :moved-on "2026-11-20" :address-confirmed? true}]
+    (testing "代表権が登記事項で未確認なら止める（egov の :representative-unconfirmed）"
+      (is (= [:blocked :representative-unconfirmed] ((juxt :status :reason) (proc/head-office-move-plan c move "2026-11-18")))))
+    (testing "確認済みなら、本店移転の変更登記を候補に出す（14 日以内・915条）。レビュー前なので提出の提案はしない"
+      (let [r (proc/head-office-move-plan verified move "2026-11-18")
+            cand (first (:candidates r))]
+        (is (= :candidates (:status r)))
+        (is (= :jp/honten-iten-toki (:procedure/id cand)))
+        (is (= "2026-12-04" (get-in cand [:deadline :due])))
+        (is (= {:registry-office-for :jp.fixture/city-b} (:submit-to cand)))
+        (is (= [:jp/honten-iten-across-registry-offices] (:unknowns cand)))
+        (is (= :withheld-unreviewed-pack (:submission-proposal r)))
+        (is (= (:deadline (co/registration-deadline "2026-11-20")) (get-in cand [:deadline :due])) "kaisha の 915 条の期限と一致する")))
+    (testing "負の対照"
+      (is (= :unknown-subdivision (:reason (proc/head-office-move-plan verified (assoc-in move [:to :subdivision] :jp.fixture/nowhere) "2026-11-18"))))
+      (is (= :cross-border-not-supported (:reason (proc/head-office-move-plan verified (assoc move :to {:country :us :subdivision :x}) "2026-11-18"))))
+      (is (= :ambiguous-address (:reason (proc/head-office-move-plan verified (assoc move :address-confirmed? false) "2026-11-18"))))
+      (is (= :unsupported-entity-form (:reason (proc/head-office-move-plan (assoc verified :company/form :godo
+                                                                                   :company/officers [{:officer/id "g" :officer/roles [:representative-member] :officer/authority-verified-on "2026-11-18"}])
+                                                                            move "2026-11-18"))))
+      (is (= :pack-not-current (:reason (proc/head-office-move-plan verified move "2027-03-01"))) "見直し期限を過ぎた制度パックでは止める"))
+    (testing "記録の操作"
+      (is (= :same-address (:error (app/dispatch s {:type :procedure/head-office-move :id "p1" :to {:country :jp :subdivision :jp.fixture/city-a} :moved-on "2026-11-20"}))))
+      (is (= :unknown-subdivision (:error (app/dispatch s {:type :company/address :address {:country :jp :subdivision :jp.fixture/nowhere}}))))
+      (is (= 1 (count (:procedures (:state (app/dispatch s {:type :procedure/head-office-move :id "p1" :to (:to move) :moved-on "2026-11-20" :address-confirmed? true})))))))
+    (testing "市町村は制度パックにあるものだけ"
+      (is (= [:jp.fixture/city-a :jp.fixture/city-b] (map first (proc/subdivisions :jp)))))))
+
+#?(:clj
+   (deftest vendored-egov-pins
+     (let [pins (slurp "vendor/egov/PINS.json")]
+       (is (= 3 (count (re-seq #"[0-9a-f]{64}" pins))))
+       (doseq [[_ f sha] (re-seq #"\"([^\"]+)\": \"([0-9a-f]{64})\"" pins)]
+         (let [bytes (java.nio.file.Files/readAllBytes (.toPath (java.io.File. (str "vendor/egov/" f))))
+               digest (.digest (java.security.MessageDigest/getInstance "SHA-256") bytes)]
+           (is (= sha (apply str (map #(format "%02x" %) digest))) f))))))
 
 (deftest i18n-complete
   (is (= {:ja-only [] :en-only []} (kaisha.i18n/missing-keys))))
