@@ -31,6 +31,12 @@
 
 ;; ---------------------------------------------------------------- 招集通知
 
+(defn requirement-source
+  "決議の要件を定める条文。役員の選任・解任は 341条、それ以外は 309条。
+  （matters の :source は、その議題に決議が要る根拠で、要件の根拠とは別。）"
+  [resolution]
+  (if (= resolution :officer) :kaisha/a341 :kaisha/a309))
+
 (defn shareholder-notice-days
   "株主総会の招集通知を発する期限の日数（299条1項）。
   公開会社、または書面・電子投票を定めたときは 2 週間。
@@ -131,7 +137,7 @@
              :resolution resolution
              :quorum-met quorum?
              :reason (cond (not quorum?) :quorum-not-met (not passed?) :insufficient-votes)
-             :source (or source :kaisha/a309)}))))))
+             :source (requirement-source resolution)}))))))
 
 (defn resolve-board
   "取締役会の決議要件（369条1・2項）。特別の利害関係を有する取締役は数に入れない。
@@ -165,3 +171,44 @@
   (when (d/valid? date)
     {:until (d/add-years date 10)
      :source (if (= body :board) :kaisha/a371 :kaisha/a318)}))
+
+(defn- ceil-div [a b] (quot (+ a (dec b)) b))
+
+(defn- min-count
+  "n 個のうち、割合 [num den] を :at-least（以上）または :more-than（超）で満たす最小の個数。"
+  [mode n [num den]]
+  (case mode
+    :at-least (ceil-div (* n num) den)
+    :more-than (inc (quot (* n num) den))))
+
+(defn shareholder-thresholds
+  "株主総会の決議で必要な数（画面に入力中に示すため）。
+  返り値 {:min-present n :min-for n}。出席の数が未入力なら :min-for は nil。
+  扱わない決議（特殊決議など）は {:status :undetermined}。"
+  [c matter rights-total rights-present]
+  (let [{:keys [resolution source]} (get matters matter)
+        q (when (#{:ordinary :special :officer} resolution)
+            (quorum-rule resolution (get-in c [:company/articles :quorum])))]
+    (cond
+      (not (co/kk? c)) {:status :undetermined :reason :not-a-stock-company}
+      (nil? q) {:status :undetermined :reason :special-special-resolution :source source}
+      (= q :invalid) {:status :blocked :reason :quorum-below-one-third}
+      (not (and (integer? rights-total) (pos? rights-total))) {:status :undetermined :reason :missing-total}
+      :else
+      {:status :ok
+       :resolution resolution
+       :min-present (if (= q :none) 0 (min-count (first q) rights-total (second q)))
+       :min-for (when (and (integer? rights-present) (pos? rights-present))
+                  (if (= resolution :special)
+                    (min-count :at-least rights-present [2 3])
+                    (min-count :more-than rights-present [1 2])))
+       :source (requirement-source resolution)})))
+
+(defn board-thresholds
+  "取締役会の決議で必要な数（369条1項）。特別利害関係の取締役は除いて数える。"
+  [c interested present-count]
+  (let [eligible (count (remove (set interested) (co/directors c)))]
+    {:eligible eligible
+     :min-present (min-count :more-than eligible [1 2])
+     :min-for (when (and present-count (pos? present-count)) (min-count :more-than present-count [1 2]))
+     :source :kaisha/a369}))

@@ -1,0 +1,49 @@
+{
+  "schema": "kaisha.vendor.awai-ds-status.v1",
+  "source": "Figma umqCqP5KSjLWh9fhCI1HaN, collection 'Awai DS · market & status' (VariableCollectionId:311:1995), read 2026-11-18 (AWAI-3446)",
+  "icons": "web/icons/*.svg: Android v2 / Icon / calendar (193:230), chat (193:209); Kaisha / Icon / meeting (319:1717), approval (319:1726), ledger (319:1733); back (193:219)",
+  "colors": {
+    "up": {
+      "variable": "market/up",
+      "id": "VariableID:311:1996",
+      "light": "#0f7a55",
+      "dark": "#5fd3a4"
+    },
+    "up-container": {
+      "variable": "market/up-container",
+      "id": "VariableID:311:1997",
+      "light": "#dcf3ea",
+      "dark": "#10372b"
+    },
+    "down": {
+      "variable": "market/down",
+      "id": "VariableID:311:1998",
+      "light": "#bc002d",
+      "dark": "#ff8fa6"
+    },
+    "down-container": {
+      "variable": "market/down-container",
+      "id": "VariableID:311:1999",
+      "light": "#ffe3e8",
+      "dark": "#4a1622"
+    },
+    "warning": {
+      "variable": "status/warning",
+      "id": "VariableID:311:2002",
+      "light": "#7a4f00",
+      "dark": "#ffcf70"
+    },
+    "warning-container": {
+      "variable": "status/warning-container",
+      "id": "VariableID:311:2003",
+      "light": "#fff1d6",
+      "dark": "#3d2c07"
+    },
+    "info-container": {
+      "variable": "status/info-container",
+      "id": "VariableID:311:2004",
+      "light": "#e1eaff",
+      "dark": "#26354e"
+    }
+  }
+}

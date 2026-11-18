@@ -1,5 +1,6 @@
 (ns kaisha.ui
-  "画面。状態は kaisha.app の純粋な関数で更新し、端末の localStorage にだけ保存する。
+  "画面。構成は Figma の提案（umqCqP5KSjLWh9fhCI1HaN、ページ 319:2、AWAI-3445）に合わせる。
+  状態は kaisha.app の純粋な関数で更新し、端末の localStorage にだけ保存する。
   外部への通信はしない（CSP connect-src は ipc のみ）。"
   (:require [cljs.reader :as reader]
             [clojure.string :as str]
@@ -7,6 +8,7 @@
             [kaisha.books :as books]
             [kaisha.chat :as chat]
             [kaisha.company :as co]
+            [kaisha.date :as d]
             [kaisha.deadlines :as dl]
             [kaisha.i18n :as i18n]
             [kaisha.law :as law]
@@ -46,9 +48,10 @@
     (str (today) "T" (pad2 (.getHours d)) ":" (pad2 (.getMinutes d)) ":" (pad2 (.getSeconds d)))))
 
 (defn- t ([k] (i18n/t (:lang @ui) k)) ([k p] (i18n/t (:lang @ui) k p)))
+(defn- has-msg? [k] (some? (get-in i18n/messages [(:lang @ui) k])))
 
-(defn- yen [n]
-  (t :common/yen {:amount (.format (js/Intl.NumberFormat. (if (= :ja (:lang @ui)) "ja-JP" "en-US")) n)}))
+(defn- num-str [n] (.format (js/Intl.NumberFormat. (if (= :ja (:lang @ui)) "ja-JP" "en-US")) n))
+(defn- yen [n] (t :common/yen {:amount (num-str n)}))
 
 (defn- h
   "最小の DOM 組み立て。[tag attrs & children]。attrs の :on-* はイベント。"
@@ -80,169 +83,182 @@
 (declare render!)
 
 (defn- act!
-  "操作を適用する。拒まれたら理由を画面に出し、状態は変えない。"
+  "操作を適用する。拒まれたら理由を画面に出し、状態は変えない。成功なら true。"
   [ev]
   (let [ev (merge {:on (today) :at (now)} ev)
         res (app/dispatch @state ev)]
     (if (:error res)
       (swap! ui assoc :error (:error res))
       (do (reset! state (:state res)) (save! (:state res)) (swap! ui assoc :error nil)))
-    (render!)))
+    (render!)
+    (not (:error res))))
+
+(defn- go! [& kvs] (apply swap! ui assoc :error nil kvs) (render!) (.scrollTo js/window 0 0))
 
 (defn- form-values [^js e]
   (.preventDefault e)
   (let [fd (js/FormData. (.-target e))]
     (into {} (map (fn [[k v]] [(keyword k) v])) (js->clj (js/Array.from (.entries fd))))))
 
-(defn- source-note [id]
-  (when id
-    (let [{:keys [title url]} (law/cite id)]
-      [:details {:class "awai-disclosure"}
-       [:summary (t :common/source)]
-       [:p {:class "awai-caption"} title]
-       [:p {:class "awai-caption awai-muted"} url]])))
+;; ---------------------------------------------------------------- 部品（Figma の DS / Kaisha 部品に対応）
 
-(defn- chip [tone label] [:span {:class (str "chip chip--" (name tone))} label])
+(defn- icon [nm] [:span {:class (str "icon icon--" nm) :aria-hidden "true"}])
 
-(defn- member-name [id]
-  (or (:member/name (app/find-by :member/id id (get-in @state [:company :company/members]))) id))
+(defn- chip
+  "DS / Chip。Tone = :warning :info :up :down :neutral"
+  [tone label] [:span {:class (str "chip chip--" (name tone))} label])
 
-(defn- field [label input] [:label {:class "field"} [:span {:class "field__label"} label] input])
+(defn- banner
+  "DS / Banner。Tone = :warning :error :info"
+  [tone title body]
+  [:div {:class (str "banner banner--" (name tone)) :role (when (= tone :error) "alert")}
+   [:strong {:class "banner__title"} title]
+   (when body [:p {:class "banner__body"} body])])
+
+(defn- stat [label value] [:div {:class "stat"} [:span {:class "stat__label"} label] [:span {:class "stat__value num"} value]])
+
+(defn- btn
+  ([style label on-click] (btn style label on-click {}))
+  ([style label on-click {:keys [destructive? disabled? type]}]
+   [:button {:class (str "awai-button awai-button--" (name style))
+             :data-destructive (when destructive? "true")
+             :disabled disabled?
+             :type (or type "button")
+             :on-click on-click} label]))
+
+(defn- field
+  "DS / Field: ラベルと、単位つきの入力欄。"
+  [label input & [unit]]
+  [:label {:class "field"}
+   [:span {:class "field__label"} label]
+   [:span {:class "field__box"} input (when unit [:span {:class "field__unit"} unit])]])
 
 (defn- select [nm options & [selected]]
   [:select {:name nm}
    (for [[v label] options] [:option {:value (name v) :selected (= v selected)} label])])
 
-;; ---------------------------------------------------------------- 予定
+(defn- card [& children] (into [:section {:class "card"}] children))
+(defn- h2 [s] [:h2 s])
+(defn- caption [s & [cls]] [:p {:class (str "caption " (or cls "muted"))} s])
+(defn- source-line [id] (when id (caption (t :common/source-inline {:law (law/short-title id)}))))
 
-(defn- deadline-row [{:keys [kind date params estimated overdue source]}]
-  [:li {:class "row"}
-   [:div {:class "row__date"} [:span date]
-    (when overdue (chip :error (t :home/overdue)))
-    (when estimated (chip :neutral (t :home/estimated)))]
-   [:div {:class "row__body"}
-    [:span (t (keyword "deadline" (name kind))
-              (cond-> params (:step params) (update :step #(t (keyword "step" (name %))))))]
-    (source-note source)]])
-
-(defn- officer-card [o]
-  (let [c (:company @state)
-        term (co/officer-term c o)
-        role (co/term-role o)
-        rep (when (some #{:representative-director} (:officer/roles o)) (co/representative? c (:officer/id o)))]
-    [:li {:class "awai-card"}
-     [:strong (:officer/name o)]
-     [:span {:class "awai-caption"}
-      (t :officer/term {:role (str/join "・" (map #(t (keyword "role" (name %))) (:officer/roles o)))
-                        :years (co/term-years c role) :elected (:officer/elected-on o)})]
-     (when (= :ok (:status term))
-       [:span {:class "awai-caption"} (t :officer/expiry {:date (:latest-expiry term)})])
-     (when rep
-       (if (= :ok (:status rep))
-         [:span {:class "awai-caption"} (t :officer/representative-ok {:date (:officer/authority-verified-on o)})]
-         (list [:span {:class "awai-caption warn"} (t :officer/representative-unverified)]
-               [:button {:class "awai-button awai-button--tonal"
-                         :on-click #(act! {:type :officer/verify :id (:officer/id o)})}
-                (t :officer/verify)])))
-     (source-note (:source term))]))
-
-(defn- home-view []
-  (let [s @state
-        items (dl/upcoming s (today) 400)]
-    (list
-     [:h2 (t :home/heading)]
-     (if (seq items)
-       [:ul {:class "list"} (map deadline-row items)]
-       [:p {:class "awai-muted"} (t :home/empty)])
-     [:details {:class "awai-disclosure"}
-      [:summary (t :home/registration-add)]
-      [:form {:class "form" :on-submit #(let [v (form-values %)]
-                                          (act! {:type :registration/add :title (:title v) :change-on (:on v)}))}
-       (field (t :home/registration-title) [:input {:name "title" :required true}])
-       (field (t :home/registration-on) [:input {:name "on" :type "date" :required true}])
-       [:button {:class "awai-button awai-button--primary" :type "submit"} (t :common/add)]]]
-     [:h2 (t :home/officers)]
-     [:ul {:class "cards"} (map officer-card (get-in s [:company :company/officers]))])))
-
-;; ---------------------------------------------------------------- 会議
-
-(defn- vote-form [m a]
-  (let [c (:company @state)
-        board? (= :board (:meeting/body m))
-        ds (co/directors c)]
-    [:form {:class "form"
-            :on-submit
-            (fn [e]
-              (.preventDefault e)
-              (let [fd (js/FormData. (.-target e))
-                    pick (fn [k] (set (js->clj (.getAll fd k))))
-                    num (fn [k] (js/parseInt (.get fd k) 10))]
-                (act! {:type :meeting/vote :id (:meeting/id m) :agenda (:agenda/id a)
-                       :vote (if board?
-                               {:present (pick "present") :for (pick "for") :interested (pick "interested")}
-                               {:rights-total (num "total") :rights-present (num "present") :rights-for (num "for")})})))}
-     (if board?
-       (for [[k label] [["present" :meetings/present] ["for" :meetings/for] ["interested" :meetings/interested]]]
-         [:fieldset {:class "checks"} [:legend (t label)]
-          (for [d ds] [:label [:input {:type "checkbox" :name k :value d}] (member-name d)])])
-       (for [[k label] [["total" :meetings/rights-total] ["present" :meetings/rights-present] ["for" :meetings/rights-for]]]
-         (field (t label) [:input {:name k :type "number" :min 0 :step 1 :required true :inputmode "numeric"}])))
-     [:button {:class "awai-button awai-button--tonal" :type "submit"} (t :meetings/vote)]]))
+(defn- member-name [id]
+  (or (:member/name (app/find-by :member/id id (get-in @state [:company :company/members]))) id))
 
 (defn- matter-label [body matter]
   (t (if (and (= body :board) (= matter :approve-financials))
        :matter/approve-financials-board
        (keyword "matter" (name matter)))))
 
-(defn- agenda-item [m a]
-  (let [r (:agenda/result a)
-        notice-ok? (= :ok (:status (mt/notice-check (:company @state) m)))]
-    [:li {:class "row"}
-     [:div {:class "row__body"}
-      [:strong (:agenda/title a)]
-      [:span {:class "awai-caption"} (matter-label (:meeting/body m) (:agenda/matter a))]
-      (if r
-        (list (chip (if (= :passed (:status r)) :up :down)
-                    (str (if (= :passed (:status r)) "✓ " "✕ ") (t (keyword "result" (name (:status r))))))
-              (source-note (:source r)))
-        (if notice-ok?
-          (vote-form m a)
-          [:span {:class "awai-caption awai-muted"} (t :meetings/vote-after-notice)]))]]))
+;; ---------------------------------------------------------------- 予定（K1・S1・S2）
+
+(defn- deadline-row [{:keys [kind date params estimated overdue source]}]
+  [:li {:class "deadline"}
+   [:div {:class "deadline__date"}
+    [:strong {:class "num"} date]
+    (cond overdue (chip :warning (t :home/overdue))
+          estimated (chip :neutral (t :home/estimated)))]
+   [:div {:class "deadline__body"}
+    [:span {:class "deadline__title"}
+     (t (keyword "deadline" (name kind))
+        (cond-> params (:step params) (update :step #(t (keyword "step" (name %))))))]
+    (source-line source)]])
+
+(defn- officer-card [o]
+  (let [c (:company @state)
+        term (co/officer-term c o)
+        role (co/term-role o)
+        rep (when (some #{:representative-director} (:officer/roles o)) (co/representative? c (:officer/id o)))]
+    (card
+     [:strong {:class "card__title"} (:officer/name o)]
+     (caption (t :officer/term {:role (str/join "・" (map #(t (keyword "role" (name %))) (:officer/roles o)))
+                                :years (co/term-years c role) :elected (:officer/elected-on o)}))
+     (when (= :ok (:status term)) (caption (t :officer/expiry {:date (:latest-expiry term)})))
+     (when rep
+       (if (= :ok (:status rep))
+         (caption (t :officer/representative-ok {:date (:officer/authority-verified-on o)}))
+         (list [:div {:class "chips"} (chip :warning (t :officer/representative-unverified))]
+               (btn :tonal (t :officer/verify) #(act! {:type :officer/verify :id (:officer/id o)}))))))))
+
+(defn- home-view []
+  (let [s @state
+        items (dl/upcoming s (today) 400)]
+    (list
+     [:div {:class "chips"}
+      (when (:fixture s) (chip :warning (t :app/fixture)))
+      (when (not= :reviewed (:review/status law/pack)) (chip :info (t :app/review)))]
+     (h2 (t :home/heading))
+     (if (seq items)
+       [:ul {:class "deadlines"} (map deadline-row items)]
+       (card [:strong (t :home/empty)] (caption (t :home/hint-empty))))
+     [:details {:class "disclosure"}
+      [:summary {:class "awai-button awai-button--text"} (str "＋ " (t :home/registration-add))]
+      [:form {:class "form" :on-submit #(let [v (form-values %)]
+                                          (act! {:type :registration/add :title (:title v) :change-on (:on v)}))}
+       (field (t :home/registration-title) [:input {:name "title" :required true}])
+       (field (t :home/registration-on) [:input {:name "on" :type "date" :required true}])
+       (btn :primary (t :common/add) nil {:type "submit"})]]
+     (h2 (t :home/officers))
+     (map officer-card (get-in s [:company :company/officers])))))
+
+;; ---------------------------------------------------------------- 会議（K2・S3）
+
+(defn- result-chip [m a]
+  (let [r (:agenda/result a) v (:agenda/vote a)
+        passed? (= :passed (:status r))
+        params {:mark (if passed? "✓" "✕") :result (t (keyword "result" (name (:status r))))
+                :for (if (= :board (:meeting/body m)) (count (:for v)) (num-str (:rights-for v)))}]
+    (chip (if passed? :up :down)
+          (if (= :board (:meeting/body m))
+            (t :meetings/result-board (assoc params :present (count (remove (set (:interested v)) (:present v)))
+                                             :eligible (count (remove (set (:interested v)) (co/directors (:company @state))))))
+            (t :meetings/result-shareholders (assoc params :present (num-str (:rights-present v)) :total (num-str (:rights-total v))))))))
+
+(defn- agenda-item [m a notice]
+  [:div {:class "agenda"}
+   [:strong (:agenda/title a)]
+   (caption (matter-label (:meeting/body m) (:agenda/matter a)))
+   (cond
+     (:agenda/result a) [:div {:class "chips"} (result-chip m a)]
+     (= :ok (:status notice)) (btn :tonal (t :meetings/record) #(go! :vote {:meeting (:meeting/id m) :agenda (:agenda/id a)}))
+     (= :pending (:status notice)) (caption (t :meetings/vote-after-notice)))])
 
 (defn- meeting-card [m]
   (let [c (:company @state)
         n (mt/notice-check c m)
-        ret (mt/minutes-retention m)]
-    [:li {:class "awai-card"}
-     [:strong (:meeting/title m)]
-     [:span {:class "awai-caption"} (str (t (keyword "body" (name (:meeting/body m)))) " · " (:meeting/date m))]
-     [:span {:class (str "awai-caption" (when (= :blocked (:status n)) " warn"))}
-      (case (:status n)
-        :pending (t :meetings/notice-pending {:date (:latest-send-date n) :days (:required-days n)})
-        :ok (if (:waived n) (t :meetings/notice-waived) (t :meetings/notice-ok {:date (:meeting/notice-sent-on m)}))
-        :blocked (t :meetings/notice-late {:date (:latest-send-date n)})
-        "")]
-     (when (= :pending (:status n))
-       [:button {:class "awai-button awai-button--tonal"
-                 :on-click #(act! {:type :meeting/notice-sent :id (:meeting/id m)})}
-        (t :meetings/notice-sent)])
-     (source-note (:source n))
-     [:ul {:class "list"} (map #(agenda-item m %) (:meeting/agenda m))]
-     (when ret [:span {:class "awai-caption awai-muted"} (t :meetings/retention {:date (:until ret)})])]))
+        ret (mt/minutes-retention m)
+        law-id (:source n)]
+    (card
+     (when (= :blocked (:status n))
+       (banner :error (t :meetings/late-title)
+               (t :meetings/late-body {:date (:latest-send-date n) :law (law/short-title law-id)})))
+     [:strong {:class "card__title"} (:meeting/title m)]
+     (caption (str (t (keyword "body" (name (:meeting/body m)))) " · " (:meeting/date m)))
+     (case (:status n)
+       :pending (list [:div {:class "chips"} (chip :warning (t :meetings/notice-pending {:date (:latest-send-date n) :days (:required-days n)}))]
+                      (btn :tonal (t :meetings/notice-sent) #(act! {:type :meeting/notice-sent :id (:meeting/id m)})))
+       :ok (caption (if (:waived n)
+                      (t :meetings/notice-waived)
+                      (t :meetings/notice-sent-on {:date (:meeting/notice-sent-on m) :law (law/short-title law-id)}))
+                    "text")
+       :blocked (list [:div {:class "chips"} (chip :warning (t :meetings/notice-chip-late {:sent (:meeting/notice-sent-on m) :date (:latest-send-date n)}))]
+                      (caption (t :meetings/late-note)))
+       nil)
+     (map #(agenda-item m % n) (:meeting/agenda m))
+     (when ret (caption (str (t :meetings/retention {:date (:until ret)}) "（" (law/short-title (:source ret)) "）"))))))
 
 (defn- meetings-view []
   (let [s @state c (:company s)]
     (list
-     [:h2 (t :meetings/heading)]
-     [:ul {:class "cards"} (map meeting-card (sort-by :meeting/date (:meetings s)))]
-     [:details {:class "awai-disclosure"}
-      [:summary (t :meetings/add)]
+     (h2 (t :meetings/heading))
+     (map meeting-card (sort-by :meeting/date (:meetings s)))
+     [:details {:class "disclosure"}
+      [:summary {:class "awai-button awai-button--text"} (str "＋ " (t :meetings/add))]
       [:form {:class "form"
-              :on-submit #(let [v (form-values %)
-                                body (keyword (:body v))]
+              :on-submit #(let [v (form-values %)]
                             (act! {:type :meeting/add
                                    :meeting {:meeting/id (str "m-" (now))
-                                             :meeting/body body
+                                             :meeting/body (keyword (:body v))
                                              :meeting/title (:title v)
                                              :meeting/date (:date v)
                                              :meeting/agenda [{:agenda/id "a1" :agenda/title (:agenda v)
@@ -257,59 +273,172 @@
                                        (when (:company/board? c)
                                          (for [k (keys mt/board-matters) :when (not= k :approve-financials)]
                                            [k (matter-label :board k)])))))
-       [:button {:class "awai-button awai-button--primary" :type "submit"} (t :common/add)]]])))
+       (btn :primary (t :common/add) nil {:type "submit"})]])))
 
-;; ---------------------------------------------------------------- 稟議
+;; ---------------------------------------------------------------- 決議の記録（K3・S4・S8）
 
-(defn- passed-board-items []
+(defn- rule-label [resolution which]
+  (case which
+    :quorum (t :vote/rule-majority)
+    :pass (if (= resolution :special) (t :vote/rule-two-thirds) (t :vote/rule-majority))))
+
+(defn- parse-count [s] (let [n (js/parseInt s 10)] (when-not (js/isNaN n) n)))
+
+(defn- preview-shareholders
+  "入力中の票数から、必要な数と判定の見込みを返す（画面の一部を差し替える）。"
+  [c matter total present for]
+  (let [th (mt/shareholder-thresholds c matter total present)
+        r (when (and total present for)
+            (mt/resolve-shareholders c {:matter matter :rights-total total :rights-present present :rights-for for}))]
+    {:stats [(stat (t :vote/quorum {:rule (rule-label (:resolution th) :quorum)})
+                   (if (:min-present th) (t :vote/at-least {:n (num-str (:min-present th))}) "—"))
+             (stat (t :vote/pass {:rule (rule-label (:resolution th) :pass)})
+                   (if (:min-for th) (t :vote/at-least {:n (num-str (:min-for th))}) "—"))]
+     :chip (cond
+             (nil? r) (chip :neutral (t :vote/preview-empty))
+             (= :blocked (:status r)) (chip :warning (t :vote/preview-invalid))
+             (= :passed (:status r)) (chip :up (t :vote/preview-pass))
+             (= :quorum-not-met (:reason r)) (chip :down (t :vote/preview-quorum {:present (num-str present) :need (num-str (:min-present th))}))
+             :else (chip :down (t :vote/preview-votes {:for (num-str for) :need (num-str (:min-for th))})))
+     :failed? (= :failed (:status r))}))
+
+(defn- preview-board [c present for interested]
+  (let [eligible-present (count (remove interested present))
+        th (mt/board-thresholds c interested eligible-present)
+        r (when (seq present) (mt/resolve-board c {:present present :for for :interested interested}))]
+    {:stats [(stat (t :vote/eligible) (t :common/people {:n (:eligible th)}))
+             (stat (t :vote/quorum {:rule (t :vote/rule-majority)}) (t :vote/at-least-people {:n (:min-present th)}))
+             (stat (t :vote/pass {:rule (t :vote/rule-majority)}) (if (:min-for th) (t :vote/at-least-people {:n (:min-for th)}) "—"))]
+     :chip (cond
+             (nil? r) (chip :neutral (t :vote/preview-empty))
+             (= :passed (:status r)) (chip :up (t :vote/preview-pass))
+             (= :quorum-not-met (:reason r)) (chip :down (t :vote/preview-quorum {:present eligible-present :need (:min-present th)}))
+             :else (chip :down (t :vote/preview-votes {:for (count (remove interested for)) :need (:min-for th)})))
+     :failed? (= :failed (:status r))}))
+
+(defn- refresh-preview! [^js form board? matter]
+  (let [c (:company @state)
+        fd (js/FormData. form)
+        p (if board?
+            (let [pick (fn [k] (set (js->clj (.getAll fd k))))]
+              (preview-board c (pick "present") (pick "for") (pick "interested")))
+            (preview-shareholders c matter (parse-count (.get fd "total")) (parse-count (.get fd "present")) (parse-count (.get fd "for"))))]
+    (.replaceChildren (.querySelector form "[data-stats]") (h (seq (:stats p))))
+    (.replaceChildren (.querySelector form "[data-preview]") (h (:chip p)))
+    (set! (.-textContent (.querySelector form "[data-submit]"))
+          (if (:failed? p) (t :meetings/record-failed) (t :meetings/record)))))
+
+(defn- vote-view []
+  (let [{:keys [meeting agenda]} (:vote @ui)
+        c (:company @state)
+        m (app/find-by :meeting/id meeting (:meetings @state))
+        a (app/find-by :agenda/id agenda (:meeting/agenda m))
+        board? (= :board (:meeting/body m))
+        n (mt/notice-check c m)
+        th (when-not board? (mt/shareholder-thresholds c (:agenda/matter a) 1 nil))
+        p (if board? (preview-board c #{} #{} #{}) (preview-shareholders c (:agenda/matter a) nil nil nil))
+        law-id (if board? :kaisha/a369 (or (:source th) :kaisha/a309))]
+    (cond
+      (nil? a) nil
+      (= :undetermined (:status th))
+      (list (banner :info (t :vote/undetermined-title) (t :vote/undetermined-body))
+            (caption (t :vote/disclaimer {:law (law/short-title :kaisha/a309)})))
+      :else
+      (list
+       [:div {:class "chips"}
+        (chip :up (if (:waived n) (t :meetings/notice-waived) (t :meetings/notice-chip-ok {:date (:meeting/notice-sent-on m)})))]
+       [:form {:class "form"
+               :on-input #(refresh-preview! (.-currentTarget %) board? (:agenda/matter a))
+               :on-change #(refresh-preview! (.-currentTarget %) board? (:agenda/matter a))
+               :on-submit
+               (fn [e]
+                 (.preventDefault e)
+                 (let [fd (js/FormData. (.-target e))
+                       pick (fn [k] (set (js->clj (.getAll fd k))))
+                       num (fn [k] (parse-count (.get fd k)))]
+                   (when (act! {:type :meeting/vote :id meeting :agenda agenda
+                                :vote (if board?
+                                        {:present (pick "present") :for (pick "for") :interested (pick "interested")}
+                                        {:rights-total (num "total") :rights-present (num "present") :rights-for (num "for")})})
+                     (go! :vote nil :tab :meetings))))}
+        (if board?
+          (for [[k label] [["present" :meetings/present] ["for" :meetings/for] ["interested" :meetings/interested]]]
+            [:fieldset {:class "checks"} [:legend (t label)]
+             (for [d (co/directors c)] [:label [:input {:type "checkbox" :name k :value d}] (member-name d)])])
+          (for [[k label] [["total" :meetings/rights-total] ["present" :meetings/rights-present] ["for" :meetings/rights-for]]]
+            (field (t label) [:input {:name k :type "number" :min 0 :step 1 :required true :inputmode "numeric"}]
+                   (t :common/unit-votes))))
+        [:div {:class "stats-row" :data-stats true} (seq (:stats p))]
+        [:div {:class "chips" :data-preview true} (:chip p)]
+        (caption (t :vote/disclaimer {:law (law/short-title law-id)}))
+        [:button {:class "awai-button awai-button--primary" :type "submit" :data-submit true} (t :meetings/record)]]))))
+
+;; ---------------------------------------------------------------- 稟議（K4・S5・S6）
+
+(defn- passed-board-items [category]
   (for [m (:meetings @state) :when (= :board (:meeting/body m))
-        a (:meeting/agenda m) :when (= :passed (get-in a [:agenda/result :status]))]
+        a (:meeting/agenda m) :when (and (= :passed (get-in a [:agenda/result :status]))
+                                         (= category (:agenda/matter a)))]
     [(str (:meeting/id m) "|" (:agenda/id a)) (str (:meeting/title m) " — " (:agenda/title a))]))
+
+(defn- status-chip [st]
+  (case st
+    :approved (chip :up (str "✓ " (t :status/approved)))
+    :rejected (chip :down (str "✕ " (t :status/rejected)))
+    :awaiting-board (chip :info (t :status/awaiting-board))
+    (chip :neutral (t (keyword "status" (name st))))))
 
 (defn- ringi-card [r]
   (let [s @state c (:company s)
         st (ringi/status c r)
         {:keys [approvers board-resolution? source]} (ringi/route c r)
-        have (count (filter #(= :approve (:decision %)) (:ringi/decisions r)))
+        approved-by (map :by (filter #(= :approve (:decision %)) (:ringi/decisions r)))
         me (:me s)
         rep (some #(when (some #{:representative-director :representative-member} (:officer/roles %)) %) (:company/officers c))]
-    [:li {:class "awai-card"}
-     [:div {:class "row__date"} [:strong (:ringi/title r)] (chip (case st :approved :up :rejected :down :neutral) (t (keyword "status" (name st))))]
-     [:span {:class "num"} (yen (:ringi/amount r))]
-     [:span {:class "awai-caption"} (str (t (keyword "category" (name (:ringi/category r)))) " · "
-                                         (t :ringi/drafter {:name (member-name (:ringi/drafter r))}))]
-     [:span {:class "awai-caption"} (t :ringi/needs {:have have :need approvers})]
-     (when board-resolution? (list [:span {:class "awai-caption warn"} (t :ringi/needs-board)] (source-note source)))
+    (card
+     [:div {:class "card__head"} [:strong {:class "card__title"} (:ringi/title r)] (status-chip st)]
+     [:p {:class "amount num"} (yen (:ringi/amount r))]
+     (caption (str (t (keyword "category" (name (:ringi/category r)))) " · "
+                   (t :ringi/drafter {:name (str (member-name (:ringi/drafter r)) (when (= me (:ringi/drafter r)) (t :ringi/you)))})))
+     (caption (t :ringi/approvers {:have (count approved-by) :need approvers
+                                   :names (if (seq approved-by) (str "（" (str/join "・" (map member-name approved-by)) "）") "")})
+              "text")
+     (when board-resolution?
+       (if-let [res (:ringi/board-resolution r)]
+         (caption (t :ringi/board-linked {:title (let [[mid aid] (str/split (:id res) #"/")
+                                                       m (app/find-by :meeting/id mid (:meetings s))]
+                                                   (str (:meeting/title m) " — " (:agenda/title (app/find-by :agenda/id aid (:meeting/agenda m)))))})
+                  "text")
+         [:div {:class "chips"} (chip :warning (str (t :ringi/needs-board)))]))
      (case st
        :draft (when (= me (:ringi/drafter r))
-                [:button {:class "awai-button awai-button--primary" :on-click #(act! {:type :ringi/submit :id (:ringi/id r)})}
-                 (t :ringi/submit)])
+                (btn :primary (t :ringi/submit) #(act! {:type :ringi/submit :id (:ringi/id r)})))
        :pending [:div {:class "actions"}
-                 [:button {:class "awai-button awai-button--primary" :on-click #(act! {:type :ringi/decide :id (:ringi/id r) :decision :approve})} (t :ringi/approve)]
-                 [:button {:class "awai-button awai-button--text" :data-destructive "true"
-                           :on-click #(act! {:type :ringi/decide :id (:ringi/id r) :decision :reject})} (t :ringi/reject)]]
+                 (btn :primary (t :ringi/approve) #(act! {:type :ringi/decide :id (:ringi/id r) :decision :approve}))
+                 (btn :primary (t :ringi/reject) #(act! {:type :ringi/decide :id (:ringi/id r) :decision :reject}) {:destructive? true})]
        :awaiting-board
-       (let [opts (passed-board-items)]
-         (when (seq opts)
+       (let [opts (passed-board-items (:ringi/category r))]
+         (if (seq opts)
            [:form {:class "form" :on-submit #(let [[mid aid] (str/split (:ref (form-values %)) #"\|")]
                                                (act! {:type :ringi/link-board :id (:ringi/id r) :meeting mid :agenda aid}))}
-            (field (t :ringi/link-board) (select "ref" opts))
-            [:button {:class "awai-button awai-button--tonal" :type "submit"} (t :common/add)]]))
+            (field (t :ringi/link-field {:category (t (keyword "category" (name (:ringi/category r))))}) (select "ref" opts) "▾")
+            (btn :tonal (t :ringi/link) nil {:type "submit"})]
+           (caption (t :ringi/no-board-items))))
        :approved (when rep
                    (let [sc (ringi/signer-check c r (:officer/id rep))]
-                     [:span {:class "awai-caption"}
-                      (t :ringi/signer {:status (str (:officer/name rep) " — "
-                                                     (if (= :ok (:status sc))
-                                                       (t :officer/representative-ok {:date (:officer/authority-verified-on rep)})
-                                                       (t :officer/representative-unverified)))})]))
-       nil)]))
+                     (if (= :ok (:status sc))
+                       (caption (t :ringi/signer-ok {:name (:officer/name rep) :date (:officer/authority-verified-on rep)}) "text")
+                       (list (banner :warning (t :ringi/signer-unverified-title) (t :ringi/signer-unverified-body {:name (:officer/name rep)}))
+                             (btn :tonal (t :officer/verify) #(act! {:type :officer/verify :id (:officer/id rep)}))))))
+       nil)
+     (source-line source))))
 
 (defn- ringi-view []
   (list
-   [:h2 (t :ringi/heading)]
-   [:ul {:class "cards"} (map ringi-card (reverse (:ringi @state)))]
-   [:details {:class "awai-disclosure"}
-    [:summary (t :ringi/new)]
+   (h2 (t :ringi/heading))
+   (map ringi-card (reverse (:ringi @state)))
+   [:details {:class "disclosure"}
+    [:summary {:class "awai-button awai-button--primary"} (t :ringi/new)]
     [:form {:class "form"
             :on-submit #(let [v (form-values %)]
                           (act! {:type :ringi/create
@@ -317,42 +446,68 @@
                                          :ringi/amount (js/parseInt (:amount v) 10)
                                          :ringi/category (keyword (:category v))}}))}
      (field (t :ringi/title) [:input {:name "title" :required true}])
-     (field (t :ringi/amount) [:input {:name "amount" :type "number" :min 0 :step 1 :required true :inputmode "numeric"}])
+     (field (t :ringi/amount) [:input {:name "amount" :type "number" :min 0 :step 1 :required true :inputmode "numeric"}] "円")
      (field (t :ringi/category) (select "category" (for [k [:ordinary :important-asset :large-borrowing :important-employee :branch]]
-                                                     [k (t (keyword "category" (name k)))])))
-     [:button {:class "awai-button awai-button--primary" :type "submit"} (t :common/add)]]]))
+                                                     [k (t (keyword "category" (name k)))])) "▾")
+     (btn :primary (t :common/add) nil {:type "submit"})]]))
 
-;; ---------------------------------------------------------------- 会計
+;; ---------------------------------------------------------------- 会計（K5・S7）
 
 (defn- resolutions-for [step]
   (for [m (:meetings @state)
         :when (= (:meeting/body m) (if (= step :board-approved) :board :shareholders))
-        a (:meeting/agenda m) :when (= :passed (get-in a [:agenda/result :status]))]
+        a (:meeting/agenda m) :when (and (= :passed (get-in a [:agenda/result :status]))
+                                         (= :approve-financials (:agenda/matter a)))]
     [(str (:meeting/id m) "|" (:agenda/id a)) (str (:meeting/title m) " — " (:agenda/title a))]))
+
+(defn- step-detail [h]
+  (let [res (when-let [rid (:resolution-id h)]
+              (let [[mid] (str/split rid #"/")] (:meeting/title (app/find-by :meeting/id mid (:meetings @state)))))]
+    (str/join " · " (remove nil? [(:on h) (member-name (:actor h)) res]))))
+
+(defn- import-form []
+  [:form {:class "form" :on-submit #(act! {:type :books/import :csv (:csv (form-values %))})}
+   (caption (t :books/import-hint))
+   [:textarea {:name "csv" :rows 8 :required true :spellcheck "false"}]
+   (btn :primary (t :books/import) nil {:type "submit"})])
+
+(defn- last-fy-end []
+  (let [c (:company @state) td (today)]
+    (peek (d/fiscal-year-ends (:company/fy-end-month c) (d/add-years td -1) td))))
 
 (defn- books-view []
   (let [s @state c (:company s) fs (:financials s)
         rows (:fs/rows fs)
         sm (books/summarize rows)
         nxt (books/next-step c fs)
-        done (set (map :step (:fs/history fs)))]
+        history (into {} (map (juxt :step identity)) (:fs/history fs))]
     (list
-     [:h2 (t :books/heading)]
-     (when (seq rows)
-       [:div {:class "awai-card"}
-        [:dl {:class "stats"}
+     (h2 (t :books/heading-fy {:fy (or (last-fy-end) "—")}))
+     (when (and (seq rows) (not (:balanced? sm)))
+       (banner :error (t :error/unbalanced-trial-balance)
+               (t :books/unbalanced-body {:assets (yen (:assets sm)) :rest (yen (+ (:liabilities sm) (:equity sm) (:net-income sm)))})))
+     (if (seq rows)
+       (card
+        [:div {:class "stats-grid"}
          (for [[k v] [[:books/assets (:assets sm)] [:books/liabilities (:liabilities sm)] [:books/equity (:equity sm)]
                       [:books/revenue (:revenue sm)] [:books/expenses (:expenses sm)] [:books/net-income (:net-income sm)]]]
-           (list [:dt (t k)] [:dd {:class "num"} (yen v)]))]
-        (if (:balanced? sm)
-          (chip :up (str "✓ " (t :books/balanced)))
-          (chip :down (str "✕ " (t :books/unbalanced))))])
+           (stat (t k) (yen v)))]
+        [:div {:class "chips"}
+         (if (:balanced? sm)
+           (chip :up (str "✓ " (t :books/balanced)))
+           (chip :down (t :books/difference {:amount (yen (- (:assets sm) (+ (:liabilities sm) (:equity sm) (:net-income sm))))})))]
+        (when (:fs/imported-on fs) (caption (t :books/imported {:date (:fs/imported-on fs)}))))
+       (card [:strong (t :books/import)] (import-form)))
      (when (seq rows)
-       [:ol {:class "steps"}
-        (for [{:keys [step source]} (books/steps c)]
-          [:li {:class (if (done step) "done" "")}
-           [:span (str (if (done step) "✓ " "○ ") (t (keyword "step" (name step))))]
-           (source-note source)])])
+       (card
+        [:ol {:class "steps"}
+         (for [{:keys [step]} (books/steps c)
+               :let [done (history step)]]
+           [:li {:class (str "step" (when done " step--done"))}
+            [:span {:class "step__mark" :aria-hidden "true"} (if done "✓" "○")]
+            [:span {:class "step__text"}
+             [:span {:class "step__label"} (t (keyword "step" (name step)))]
+             [:span {:class "step__detail"} (if done (step-detail done) (t (keyword "books" (str "hint-" (name step)))))]]])]))
      (cond
        (and (seq rows) nxt)
        (let [needs-res? (#{:board-approved :agm-approved} (:step nxt))]
@@ -361,39 +516,38 @@
                                    [mid aid] (when (:ref v) (str/split (:ref v) #"\|"))]
                                (act! (cond-> {:type :books/advance :step (:step nxt)}
                                        mid (assoc :meeting mid :agenda aid))))}
-          (when needs-res? (field (t :books/resolution) (select "ref" (resolutions-for (:step nxt)))))
-          [:button {:class "awai-button awai-button--primary" :type "submit"}
-           (t :books/advance {:step (t (keyword "step" (name (:step nxt))))})]])
-       (seq rows) [:p (t :books/done)])
-     (when (empty? (:fs/history fs))
-       [:details {:class "awai-disclosure" :open (empty? rows)}
-        [:summary (t :books/import)]
-        [:p {:class "awai-caption awai-muted"} (t :books/import-hint)]
-        [:form {:class "form" :on-submit #(act! {:type :books/import :csv (:csv (form-values %))})}
-         [:textarea {:name "csv" :rows 8 :required true :spellcheck "false"}]
-         [:button {:class "awai-button awai-button--primary" :type "submit"} (t :books/import)]]]))))
+          (when needs-res? (field (t :books/resolution) (select "ref" (resolutions-for (:step nxt))) "▾"))
+          (btn :primary (t :books/advance {:step (t (keyword "step" (name (:step nxt))))}) nil
+               {:type "submit" :disabled? (not (:balanced? sm))})])
+       (seq rows) (caption (t :books/done) "text"))
+     (when (and (seq rows) (empty? (:fs/history fs)))
+       [:details {:class "disclosure" :open (not (:balanced? sm))}
+        [:summary {:class "awai-button awai-button--tonal"} (t :books/reimport)]
+        (import-form)]))))
 
-;; ---------------------------------------------------------------- 会話
+;; ---------------------------------------------------------------- 会話（K6）
 
 (defn- channel-label [ch]
   (if (= :dm (:channel/kind ch))
     (t :chat/dm {:name (member-name (first (disj (:channel/members ch) (:me @state))))})
     (str "# " (:channel/name ch))))
 
+(defn- hhmm [at] (if (and at (>= (count at) 16)) (subs at 11 16) at))
+
 (defn- message-view [space ch-id m & [reply?]]
   [:li {:class (str "msg" (when reply? " msg--reply"))}
-   [:div {:class "msg__meta"} [:strong (member-name (:message/author m))] [:span {:class "awai-caption awai-muted"} (:message/at m)]]
-   [:p (:message/body m)]
+   [:div {:class "msg__meta"} [:strong (member-name (:message/author m))] [:span {:class "caption muted"} (hhmm (:message/at m))]]
+   [:p {:class "msg__body"} (:message/body m)]
    (when-not reply?
      (let [rs (chat/replies space ch-id (:message/id m))]
        (list
         (when (seq rs) [:ul {:class "thread"} (map #(message-view space ch-id % true) rs)])
-        [:details {:class "awai-disclosure"}
-         [:summary (if (seq rs) (t :chat/replies {:n (count rs)}) (t :chat/reply))]
+        [:details {:class "disclosure"}
+         [:summary {:class "caption link"} (if (seq rs) (t :chat/replies {:n (count rs)}) (t :chat/reply))]
          [:form {:class "compose" :on-submit #(act! {:type :chat/post :channel ch-id :parent (:message/id m)
                                                      :body (:body (form-values %))})}
-          [:input {:name "body" :required true :placeholder (t :chat/placeholder)}]
-          [:button {:class "awai-button awai-button--tonal" :type "submit"} (t :chat/send)]]])))])
+          [:span {:class "compose__input"} [:input {:name "body" :required true :placeholder (t :chat/placeholder-short)}]]
+          (btn :tonal (t :chat/send) nil {:type "submit"})]])))])
 
 (defn- chat-view []
   (let [s @state me (:me s) space (:space s)
@@ -403,70 +557,77 @@
     (when ch-id (js/setTimeout #(when (pos? (chat/unread-count (:space @state) me ch-id))
                                   (act! {:type :chat/read :channel ch-id})) 0))
     (list
-     [:h2 (t :chat/heading)]
-     [:nav {:class "channels" :aria-label (t :chat/heading)}
+     [:nav {:class "segments" :aria-label (t :chat/heading)}
       (for [ch chs :let [n (chat/unread-count space me (:channel/id ch))]]
-        [:button {:class "awai-button awai-button--text" :aria-pressed (str (= ch-id (:channel/id ch)))
-                  :on-click #(do (swap! ui assoc :channel (:channel/id ch)) (render!))}
-         (channel-label ch) (when (pos? n) (str " · " (t :chat/unread {:n n})))])]
-     [:details {:class "awai-disclosure"}
-      [:summary (t :chat/open-dm)]
+        [:button {:class "segment" :type "button" :aria-pressed (str (= ch-id (:channel/id ch)))
+                  :on-click #(go! :channel (:channel/id ch))}
+         (str (channel-label ch) (when (pos? n) (str " · " (t :chat/unread {:n n}))))])]
+     [:details {:class "disclosure"}
+      [:summary {:class "caption link"} (t :chat/open-dm)]
       [:div {:class "actions"}
        (for [m (get-in s [:company :company/members]) :when (not= me (:member/id m))]
-         [:button {:class "awai-button awai-button--text"
-                   :on-click #(do (act! {:type :chat/open-dm :with (:member/id m)})
-                                  (swap! ui assoc :channel (chat/dm-id me (:member/id m))) (render!))}
-          (:member/name m)])]]
+         (btn :text (:member/name m) #(do (act! {:type :chat/open-dm :with (:member/id m)})
+                                          (go! :channel (chat/dm-id me (:member/id m))))))]]
      (when ch-id
        (list
         [:ul {:class "messages"} (map #(message-view space ch-id %) (chat/top-level space ch-id))]
-        [:form {:class "compose" :on-submit #(act! {:type :chat/post :channel ch-id :body (:body (form-values %))})}
-         [:input {:name "body" :required true :placeholder (t :chat/placeholder)}]
-         [:button {:class "awai-button awai-button--primary" :type "submit"} (t :chat/send)]])))))
+        [:div {:class "spacer"}]
+        [:form {:class "compose compose--main" :on-submit #(act! {:type :chat/post :channel ch-id :body (:body (form-values %))})}
+         [:span {:class "compose__input"} [:input {:name "body" :required true :placeholder (t :chat/placeholder-short)}]]
+         (btn :primary (t :chat/send) nil {:type "submit"})])))))
 
 ;; ---------------------------------------------------------------- 全体
 
-(def tabs [[:home "◷"] [:meetings "◫"] [:ringi "✓"] [:books "¥"] [:chat "✉"]])
+(def tabs [[:home "calendar"] [:meetings "meeting"] [:ringi "approval"] [:books "ledger"] [:chat "chat"]])
 
-(defn- app-bar []
+(defn- app-bar [{:keys [title subtitle on-back]}]
+  [:header {:class "app-bar"}
+   (when on-back [:button {:class "app-bar__back" :type "button" :aria-label (t :common/back) :on-click on-back} (icon "back")])
+   [:div {:class "app-bar__text"} [:h1 title] [:p subtitle]]])
+
+(defn- settings []
   (let [s @state c (:company s)]
-    [:header {:class "app-bar"}
-     [:div
-      [:h1 (t :app/title)]
-      [:p {:class "awai-caption"} (:company/name c)]]
-     [:div {:class "app-bar__chips"}
-      (when (:fixture s) (chip :warning (t :app/fixture)))
-      (when (not= :reviewed (:review/status law/pack)) (chip :info (t :app/review)))]
-     [:div {:class "app-bar__actions"}
-      (field (t :app/acting-as)
-             [:select {:on-change #(act! {:type :session/as :member (.. % -target -value)})}
-              (for [m (:company/members c)]
-                [:option {:value (:member/id m) :selected (= (:me s) (:member/id m))} (:member/name m)])])
-      [:button {:class "awai-button awai-button--text"
-                :on-click #(do (swap! ui update :lang {:ja :en :en :ja}) (render!))} (t :app/language)]]]))
+    [:details {:class "disclosure settings"}
+     [:summary {:class "awai-button awai-button--text"} (t :app/settings)]
+     (field (t :app/acting-as)
+            [:select {:on-change #(act! {:type :session/as :member (.. % -target -value)})}
+             (for [m (:company/members c)]
+               [:option {:value (:member/id m) :selected (= (:me s) (:member/id m))} (:member/name m)])] "▾")
+     [:div {:class "actions"}
+      (btn :text (t :app/language) #(do (swap! ui update :lang {:ja :en :en :ja}) (render!)))
+      (btn :text (t :app/reset) #(let [s (app/sample)] (reset! state s) (save! s) (go! :vote nil)) {:destructive? true})]
+     (caption (t :app/saved-locally))]))
+
+(defn- error-banner []
+  (when-let [e (:error @ui)]
+    (let [k (keyword "error" (name e)) b (keyword "error-body" (name e))]
+      (banner :error (if (has-msg? k) (t k) (t :error/generic {:code (name e)})) (when (has-msg? b) (t b))))))
 
 (defn- view []
-  [:div {:class "shell"}
-   (app-bar)
-   [:main {:class "content"}
-    (when-let [e (:error @ui)]
-      [:div {:class "banner banner--error" :role "alert"}
-       (let [k (keyword "error" (name e))]
-         (if (get-in i18n/messages [(:lang @ui) k]) (t k) (t :error/generic {:code (name e)})))])
-    (case (:tab @ui)
-      :home (home-view) :meetings (meetings-view) :ringi (ringi-view) :books (books-view) :chat (chat-view))
-    [:footer {:class "foot awai-caption awai-muted"}
-     [:p (if (:storage? @ui) (t :app/saved-locally) (t :app/storage-unavailable))]
-     [:button {:class "awai-button awai-button--text" :data-destructive "true"
-               :on-click #(let [s (app/sample)] (reset! state s) (save! s) (swap! ui assoc :error nil) (render!))}
-      (t :app/reset)]]]
-   [:nav {:class "awai-navigation"}
-    [:div {:class "tabs"}
-     (for [[k mark] tabs]
-       [:a {:href (str "#" (name k)) :aria-current (when (= k (:tab @ui)) "page")
-            :on-click #(do (.preventDefault %) (swap! ui assoc :tab k :error nil) (render!))}
-        [:span {:class "awai-nav-indicator" :aria-hidden "true"} mark]
-        (t (keyword "tab" (name k)))])]]])
+  (let [s @state
+        vote (:vote @ui)
+        m (when vote (app/find-by :meeting/id (:meeting vote) (:meetings s)))
+        a (when m (app/find-by :agenda/id (:agenda vote) (:meeting/agenda m)))]
+    [:div {:class "shell"}
+     (if a
+       (app-bar {:title (:meeting/title m) :subtitle (matter-label (:meeting/body m) (:agenda/matter a))
+                 :on-back #(go! :vote nil)})
+       (app-bar {:title (t :app/title) :subtitle (get-in s [:company :company/name])}))
+     [:main {:class "content"}
+      (when-not (:storage? @ui) (banner :warning (t :storage/title) (t :storage/body)))
+      (error-banner)
+      (if a
+        (vote-view)
+        (list
+         (case (:tab @ui)
+           :home (home-view) :meetings (meetings-view) :ringi (ringi-view) :books (books-view) :chat (chat-view))
+         (settings)))]
+     [:nav {:class "tabs" :aria-label "Kaisha"}
+      (for [[k ic] tabs]
+        [:a {:href (str "#" (name k)) :class "tab" :aria-current (when (and (= k (:tab @ui)) (not a)) "page")
+             :on-click #(do (.preventDefault %) (go! :tab k :vote nil))}
+         [:span {:class "tab__indicator"} (icon ic)]
+         [:span {:class "tab__label"} (t (keyword "tab" (name k)))]])]]))
 
 (defn render! []
   (let [root (.getElementById js/document "app")

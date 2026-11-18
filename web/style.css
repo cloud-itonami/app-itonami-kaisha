@@ -1,42 +1,133 @@
-/* Kaisha の配置。色・角丸・余白は awai-ui のトークン（--awai-*）だけを使う。 */
+/* Kaisha の配置。Figma の提案（umqCqP5KSjLWh9fhCI1HaN、ページ 319:2）に合わせる。
+   色は awai-ui のトークン（--awai-*）と、Figma の Awai DS · market & status から作った
+   --awai-up / --awai-down / --awai-warning などだけを使う（scripts/build.mjs が生成）。 */
 *{box-sizing:border-box}
-body{margin:0;min-block-size:100dvh}
-h1{font-size:1.375rem;margin:0}
-h2{font-size:1.125rem;margin:24px 0 8px}
-.shell{max-inline-size:960px;margin-inline:auto;padding:0 16px calc(96px + env(safe-area-inset-bottom,0px))}
-.app-bar{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;justify-content:space-between;padding-block:16px;border-block-end:1px solid var(--awai-border)}
-.app-bar p{margin:0}
-.app-bar__chips,.app-bar__actions,.actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-.chip{display:inline-flex;align-items:center;min-block-size:28px;padding:2px 12px;border-radius:999px;font-size:.75rem;font-weight:600;background:var(--awai-container);color:var(--awai-onContainer, var(--awai-text))}
-.chip--warning,.chip--error,.chip--down{background:var(--awai-errorContainer, var(--awai-container));color:var(--awai-error)}
-.chip--up{background:var(--awai-container);color:var(--awai-primary)}
-.chip--neutral{background:var(--awai-surface);color:var(--awai-muted);border:1px solid var(--awai-border)}
-.warn{color:var(--awai-error)}
-.banner{padding:12px 16px;border-radius:12px;margin-block:16px}
-.banner--error{background:var(--awai-errorContainer, var(--awai-container));color:var(--awai-error)}
-.list,.cards,.messages,.thread,.steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
-.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr));gap:16px}
-.row{display:grid;grid-template-columns:minmax(7.5em,auto) 1fr;gap:4px 16px;padding:12px 0;border-block-end:1px solid var(--awai-border)}
-.row__date{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;font-variant-numeric:tabular-nums}
-.row__body{display:flex;flex-direction:column;gap:4px;min-inline-size:0}
-.awai-card .row{grid-template-columns:1fr}
-.num{font-variant-numeric:tabular-nums;text-align:end}
-.form{display:flex;flex-direction:column;gap:12px;padding-block:8px}
-.field{display:flex;flex-direction:column;gap:4px}
-.field__label{font-size:.875rem;color:var(--awai-muted)}
-.checks{border:1px solid var(--awai-border);border-radius:12px;padding:8px 12px;display:flex;flex-wrap:wrap;gap:8px 16px}
+body{margin:0;min-block-size:100dvh;background:var(--awai-background)}
+.shell{max-inline-size:640px;margin-inline:auto;min-block-size:100dvh;display:flex;flex-direction:column}
+.content{flex:1;display:flex;flex-direction:column;gap:14px;padding:4px 16px calc(96px + env(safe-area-inset-bottom,0px))}
+.content h2{font-size:1rem;font-weight:700;margin:0;line-height:1.4}
+p{margin:0}
+.num{font-variant-numeric:tabular-nums}
+.caption{font-size:.75rem;line-height:1.4;overflow-wrap:anywhere}
+.muted{color:var(--awai-muted)}
+.text{color:var(--awai-text)}
+.link{color:var(--awai-primary);cursor:pointer;min-block-size:32px;display:flex;align-items:center}
+
+/* DS / App bar */
+.app-bar{display:flex;align-items:center;gap:12px;padding:12px 16px;position:sticky;inset-block-start:0;z-index:4;background:var(--awai-background)}
+.app-bar h1{font-size:1.125rem;font-weight:700;margin:0;line-height:1.4}
+.app-bar p{font-size:.75rem;color:var(--awai-muted);line-height:1.4}
+.app-bar__back{display:grid;place-items:center;inline-size:48px;block-size:48px;margin-inline-start:-12px;border:0;border-radius:999px;background:transparent;color:var(--awai-text);cursor:pointer}
+
+/* icons: Figma から書き出した SVG を mask にして、文字色で塗る */
+.icon{display:inline-block;inline-size:24px;block-size:24px;background:currentColor;-webkit-mask:var(--icon) center/contain no-repeat;mask:var(--icon) center/contain no-repeat}
+.icon--calendar{--icon:url(icons/calendar.svg)} .icon--meeting{--icon:url(icons/meeting.svg)} .icon--approval{--icon:url(icons/approval.svg)}
+.icon--ledger{--icon:url(icons/ledger.svg)} .icon--chat{--icon:url(icons/chat.svg)} .icon--back{--icon:url(icons/back.svg)}
+
+/* Kaisha / Bottom tabs, Kaisha / Tab */
+.tabs{position:fixed;inset-inline:0;inset-block-end:0;z-index:5;display:flex;justify-content:space-between;padding:8px 16px calc(12px + env(safe-area-inset-bottom,0px));background:var(--awai-surface);border-block-start:1px solid var(--awai-border)}
+.tabs{max-inline-size:640px;margin-inline:auto}
+.tab{display:flex;flex-direction:column;align-items:center;gap:4px;min-inline-size:64px;min-block-size:48px;text-decoration:none;color:var(--awai-muted);font-size:.75rem;font-weight:500}
+.tab__indicator{display:grid;place-items:center;padding:4px 20px;border-radius:999px}
+.tab[aria-current=page]{color:var(--awai-primary);font-weight:700}
+.tab[aria-current=page] .tab__indicator{background:var(--awai-container)}
+
+/* DS / Chip */
+.chips{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.chip{display:inline-flex;align-items:center;min-block-size:25px;padding:2px 10px;border-radius:999px;font-size:.75rem;font-weight:500;line-height:1.4;overflow-wrap:anywhere}
+.chip--warning{background:var(--awai-warning-container);color:var(--awai-warning)}
+.chip--info{background:var(--awai-info-container);color:var(--awai-primary)}
+.chip--up{background:var(--awai-up-container);color:var(--awai-up)}
+.chip--down{background:var(--awai-down-container);color:var(--awai-down)}
+.chip--neutral{background:var(--awai-info-container);color:var(--awai-muted)}
+
+/* DS / Banner */
+.banner{display:flex;flex-direction:column;gap:4px;padding:12px 16px;border-radius:12px}
+.banner__title{font-size:.875rem;font-weight:700;line-height:1.4}
+.banner__body{font-size:.75rem;line-height:1.4;color:var(--awai-text)}
+.banner--error{background:var(--awai-errorContainer)} .banner--error .banner__title{color:var(--awai-error)}
+.banner--warning{background:var(--awai-warning-container)} .banner--warning .banner__title{color:var(--awai-warning)}
+.banner--info{background:var(--awai-info-container)} .banner--info .banner__title{color:var(--awai-primary)}
+
+/* card */
+.card{display:flex;flex-direction:column;gap:8px;padding:12px 16px;border-radius:16px;background:var(--awai-surface);min-inline-size:0}
+.card__title{font-size:1rem;font-weight:700;line-height:1.4}
+.card__head{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.amount{font-size:1.25rem;font-weight:700;text-align:end}
+.agenda{display:flex;flex-direction:column;gap:4px;padding-block:4px}
+.agenda strong{font-size:.875rem}
+
+/* Kaisha / Deadline row */
+.deadlines{list-style:none;margin:0;padding:0}
+.deadline{display:grid;grid-template-columns:minmax(6.5em,auto) 1fr;gap:16px;padding-block:12px;border-block-end:1px solid var(--awai-border)}
+.deadline__date{display:flex;flex-direction:column;align-items:flex-start;gap:4px;font-size:.875rem}
+.deadline__body{display:flex;flex-direction:column;gap:2px;min-inline-size:0}
+.deadline__title{font-size:.875rem;font-weight:500;line-height:1.4;overflow-wrap:anywhere}
+
+/* DS / Field */
+.form{display:flex;flex-direction:column;gap:12px}
+.field{display:flex;flex-direction:column;gap:6px}
+.field__label{font-size:.75rem;color:var(--awai-muted)}
+.field__box{display:flex;align-items:center;gap:8px;min-block-size:48px;padding-inline:16px;border:1px solid var(--awai-border);border-radius:12px;background:var(--awai-surface)}
+.field__box :is(input,select){flex:1;min-inline-size:0;border:0;background:transparent;padding:12px 0;font:inherit;font-size:1rem;color:var(--awai-text);appearance:none}
+.field__box :is(input,select):focus{outline:none}
+.field__box:focus-within{outline:3px solid var(--awai-primary);outline-offset:2px}
+.field__unit{font-size:.875rem;color:var(--awai-muted)}
+textarea{inline-size:100%;font:inherit;color:var(--awai-text);background:var(--awai-surface);border:1px solid var(--awai-border);border-radius:12px;padding:12px 16px}
+
+/* DS / Stat */
+.stats-row{display:flex;flex-wrap:wrap;gap:24px}
+.stats-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px 16px}
+.stat{display:flex;flex-direction:column;gap:2px;min-inline-size:0}
+.stat__label{font-size:.75rem;color:var(--awai-muted)}
+.stat__value{font-size:1rem;font-weight:700;overflow-wrap:anywhere}
+
+/* Kaisha / Step */
+.steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.step{display:flex;gap:12px;align-items:center;padding-block:8px}
+.step__mark{inline-size:16px;font-weight:700;color:var(--awai-muted);text-align:center}
+.step--done .step__mark{color:var(--awai-up)}
+.step__text{display:flex;flex-direction:column}
+.step__label{font-size:.875rem;font-weight:500;color:var(--awai-muted)}
+.step--done .step__label{font-weight:700;color:var(--awai-text)}
+.step__detail{font-size:.75rem;color:var(--awai-muted)}
+
+/* buttons */
+.actions{display:flex;gap:12px;flex-wrap:wrap}
+.card .actions > .awai-button{flex:1}
+.content > .awai-button,.content > .form > .awai-button,.card > .awai-button{align-self:stretch}
+.card > .awai-button--tonal{align-self:flex-start}
+.awai-button[data-destructive=true]:not(.awai-button--text){background:var(--awai-error);color:var(--awai-onPrimary)}
+.awai-button--text[data-destructive=true]{color:var(--awai-error)}
+
+/* checks（取締役会の出席・賛成） */
+.checks{border:1px solid var(--awai-border);border-radius:12px;padding:8px 12px;display:flex;flex-wrap:wrap;gap:4px 16px;margin:0}
+.checks legend{font-size:.75rem;color:var(--awai-muted);padding-inline:4px}
 .checks label{display:flex;gap:8px;align-items:center;min-block-size:48px}
-.stats{display:grid;grid-template-columns:1fr auto;gap:4px 16px;margin:0}
-.stats dd{margin:0}
-.steps li{display:flex;flex-direction:column}
-.steps li.done{color:var(--awai-primary)}
-.channels{display:flex;flex-wrap:wrap;gap:4px}
-.msg{padding:8px 0;border-block-end:1px solid var(--awai-border)}
-.msg p{margin:4px 0;white-space:pre-wrap;overflow-wrap:anywhere}
-.msg__meta{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
-.msg--reply{border:0;padding-inline-start:16px;border-inline-start:3px solid var(--awai-border)}
-.compose{display:flex;gap:8px;align-items:center;padding-block:8px}
-.compose input{flex:1;min-inline-size:0}
-.tabs{display:grid;grid-template-columns:repeat(5,1fr);max-inline-size:640px;margin-inline:auto}
-.foot{margin-block-start:48px;display:flex;flex-direction:column;gap:8px;align-items:flex-start}
+
+/* disclosure */
+.disclosure > summary{list-style:none;align-self:flex-start}
+.disclosure > summary.awai-button--primary{display:flex;inline-size:100%}
+.disclosure > summary::-webkit-details-marker{display:none}
+.disclosure[open] > summary{margin-block-end:12px}
+.settings{margin-block-start:24px;display:flex;flex-direction:column;gap:12px}
+.settings > *:not(summary){margin-block-end:12px}
+
+/* DS / Segment と会話 */
+.segments{display:flex;flex-wrap:wrap;gap:4px 8px}
+.segment{min-block-size:40px;padding:8px 16px;border:0;border-radius:999px;background:transparent;color:var(--awai-text);font:inherit;font-size:.875rem;cursor:pointer}
+.segment[aria-pressed=true]{background:var(--awai-container);color:var(--awai-primary);font-weight:700}
+.messages,.thread{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.msg{padding-block:8px;display:flex;flex-direction:column;gap:4px}
+.msg__meta{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;font-size:.875rem}
+.msg__body{font-size:.875rem;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
+.msg--reply{padding-inline-start:16px;border-inline-start:3px solid var(--awai-border)}
+.spacer{flex:1}
+.compose{display:flex;gap:8px;align-items:center}
+.compose__input{flex:1;display:flex;min-block-size:48px;padding-inline:16px;border:1px solid var(--awai-border);border-radius:999px;background:var(--awai-surface)}
+.compose__input input{flex:1;min-inline-size:0;border:0;background:transparent;font:inherit;font-size:.875rem;color:var(--awai-text)}
+.compose__input input:focus{outline:none}
+.compose__input:focus-within{outline:3px solid var(--awai-primary);outline-offset:2px}
+.compose .awai-button{inline-size:96px;min-inline-size:96px}
+
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}

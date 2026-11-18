@@ -89,6 +89,30 @@
     (is (= :undetermined (:status (mt/resolve-shareholders c {:matter :share-transfer-restriction :rights-total 10 :rights-present 10 :rights-for 10}))))
     (is (= :blocked (:status (mt/resolve-shareholders c {:matter :dividend :rights-total 10 :rights-present 5 :rights-for 6}))))))
 
+(deftest thresholds
+  (testing "普通決議: 100 個なら定足数 51、出席 60 なら可決 31（309条1項）"
+    (is (= {:min-present 51 :min-for 31} (select-keys (mt/shareholder-thresholds c :approve-financials 100 60) [:min-present :min-for]))))
+  (testing "特別決議: 出席 60 なら 40 以上"
+    (is (= 40 (:min-for (mt/shareholder-thresholds c :amend-articles 100 60)))))
+  (testing "定款で定足数 1/3: 90 個なら 30"
+    (is (= 30 (:min-present (mt/shareholder-thresholds (assoc-in c [:company/articles :quorum :officer] [1 3]) :elect-officer 90 30)))))
+  (testing "要件の根拠は 309条（役員の選任は 341条）。議題の根拠の 438条ではない"
+    (is (= :kaisha/a309 (:source (mt/shareholder-thresholds c :approve-financials 100 60))))
+    (is (= :kaisha/a309 (:source (mt/resolve-shareholders c {:matter :approve-financials :rights-total 100 :rights-present 60 :rights-for 40}))))
+    (is (= :kaisha/a341 (:source (mt/shareholder-thresholds c :elect-officer 100 60)))))
+  (testing "特殊決議は示さない"
+    (is (= :undetermined (:status (mt/shareholder-thresholds c :share-transfer-restriction 100 60)))))
+  (testing "必要な数は判定と一致する（境界の 1 つ下は否決）"
+    (doseq [[total present] [[100 60] [7 5] [90 61] [3 2]]]
+      (let [{:keys [min-present min-for]} (mt/shareholder-thresholds c :approve-financials total present)]
+        (is (= (>= present min-present)
+               (:quorum-met (mt/resolve-shareholders c {:matter :approve-financials :rights-total total :rights-present present :rights-for 0}))))
+        (is (= :passed (:status (mt/resolve-shareholders c {:matter :approve-financials :rights-total total :rights-present (max present min-present) :rights-for (:min-for (mt/shareholder-thresholds c :approve-financials total (max present min-present)))}))))
+        (is (not= :passed (:status (mt/resolve-shareholders c {:matter :approve-financials :rights-total total :rights-present present :rights-for (dec min-for)})))))))
+  (testing "取締役会: 3 人なら出席 2、出席 2 なら賛成 2。利害関係者 1 人なら対象 2 人"
+    (is (= {:eligible 3 :min-present 2 :min-for 2} (select-keys (mt/board-thresholds c #{} 2) [:eligible :min-present :min-for])))
+    (is (= 2 (:eligible (mt/board-thresholds c #{"yamada"} nil))))))
+
 (deftest board-resolutions
   (testing "特別利害関係のある取締役は数えない（369条2項）"
     (let [r (mt/resolve-board c {:present #{"yamada" "sato" "suzuki"} :for #{"yamada" "sato"} :interested #{"yamada"}})]
@@ -227,4 +251,6 @@
   (is (= :unreviewed (:review/status law/pack)))
   (is (not (law/stale? "2026-11-18")))
   (is (law/stale? "2027-02-19"))
-  (is (thrown? #?(:clj Exception :cljs js/Error) (law/cite :kaisha/a999))))
+  (is (thrown? #?(:clj Exception :cljs js/Error) (law/cite :kaisha/a999)))
+  (is (= "会社法 第368条" (law/short-title :kaisha/a368)))
+  (is (= "法人税法 第74条" (law/short-title :hojinzei/a74))))
