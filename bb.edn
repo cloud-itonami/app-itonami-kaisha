@@ -1,0 +1,9 @@
+{:paths ["src" "test"]
+ :tasks
+ {test {:doc "全 test を実行する（失敗があれば exit 1）"
+        :task (let [{:keys [fail error]} (do (require 'kaisha.core-test)
+                                             (clojure.test/run-tests 'kaisha.core-test))]
+                (System/exit (if (zero? (+ fail error)) 0 1)))}
+  ui {:doc "画面の JS をビルドする（JVM で shadow-cljs）"
+      :task (do (babashka.fs/delete-tree "target") (babashka.fs/delete-tree ".shadow-cljs")
+                (shell "clojure -M:ui -m shadow.cljs.devtools.cli release app"))}}}

@@ -1,0 +1,8 @@
+;; 画面のビルド。依存は deps.edn の :ui alias。
+;; clojure -M:ui -m shadow.cljs.devtools.cli release app
+{:deps {:aliases [:ui]}
+ :builds {:app {:target :browser
+                :output-dir "target/app"
+                :asset-path "."
+                :modules {:main {:init-fn kaisha.ui/init}}
+                :compiler-options {:optimizations :advanced}}}}

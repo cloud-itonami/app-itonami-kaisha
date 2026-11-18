@@ -1,0 +1,11 @@
+{
+  "schema": "kaisha.vendor.pins.v1",
+  "source": "https://github.com/network-awai/awai-os/tree/f95a2c21206c4fe835622b7d96140b31e1f8537f/packages/awai-ui",
+  "revision": "f95a2c21206c4fe835622b7d96140b31e1f8537f",
+  "license": "MIT",
+  "files": {
+    "ui.css": "2643627cac50c42a9c4338b51bbff0cf3e025160f3f48d378bd49248263d0103",
+    "figma-android-v2.json": "10f6612a4a26cb7a297253eaeaddfc2dc4ec12b13d9b4718840cd7a39c70b033",
+    "LICENSE": "bf06f1cdf2de187c89c775d9faf23a225cceae915fff674dea44660698675ad5"
+  }
+}
