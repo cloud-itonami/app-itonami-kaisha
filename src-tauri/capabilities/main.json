@@ -1,0 +1,1 @@
+{"identifier": "kaisha-local", "description": "Host information only; no external network, filesystem, installer or shell permissions.", "windows": ["main"], "permissions": ["allow-awai-host-info"]}

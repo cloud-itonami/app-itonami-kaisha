@@ -1,0 +1,42 @@
+/* Kaisha の配置。色・角丸・余白は awai-ui のトークン（--awai-*）だけを使う。 */
+*{box-sizing:border-box}
+body{margin:0;min-block-size:100dvh}
+h1{font-size:1.375rem;margin:0}
+h2{font-size:1.125rem;margin:24px 0 8px}
+.shell{max-inline-size:960px;margin-inline:auto;padding:0 16px calc(96px + env(safe-area-inset-bottom,0px))}
+.app-bar{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;justify-content:space-between;padding-block:16px;border-block-end:1px solid var(--awai-border)}
+.app-bar p{margin:0}
+.app-bar__chips,.app-bar__actions,.actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.chip{display:inline-flex;align-items:center;min-block-size:28px;padding:2px 12px;border-radius:999px;font-size:.75rem;font-weight:600;background:var(--awai-container);color:var(--awai-onContainer, var(--awai-text))}
+.chip--warning,.chip--error,.chip--down{background:var(--awai-errorContainer, var(--awai-container));color:var(--awai-error)}
+.chip--up{background:var(--awai-container);color:var(--awai-primary)}
+.chip--neutral{background:var(--awai-surface);color:var(--awai-muted);border:1px solid var(--awai-border)}
+.warn{color:var(--awai-error)}
+.banner{padding:12px 16px;border-radius:12px;margin-block:16px}
+.banner--error{background:var(--awai-errorContainer, var(--awai-container));color:var(--awai-error)}
+.list,.cards,.messages,.thread,.steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr));gap:16px}
+.row{display:grid;grid-template-columns:minmax(7.5em,auto) 1fr;gap:4px 16px;padding:12px 0;border-block-end:1px solid var(--awai-border)}
+.row__date{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;font-variant-numeric:tabular-nums}
+.row__body{display:flex;flex-direction:column;gap:4px;min-inline-size:0}
+.awai-card .row{grid-template-columns:1fr}
+.num{font-variant-numeric:tabular-nums;text-align:end}
+.form{display:flex;flex-direction:column;gap:12px;padding-block:8px}
+.field{display:flex;flex-direction:column;gap:4px}
+.field__label{font-size:.875rem;color:var(--awai-muted)}
+.checks{border:1px solid var(--awai-border);border-radius:12px;padding:8px 12px;display:flex;flex-wrap:wrap;gap:8px 16px}
+.checks label{display:flex;gap:8px;align-items:center;min-block-size:48px}
+.stats{display:grid;grid-template-columns:1fr auto;gap:4px 16px;margin:0}
+.stats dd{margin:0}
+.steps li{display:flex;flex-direction:column}
+.steps li.done{color:var(--awai-primary)}
+.channels{display:flex;flex-wrap:wrap;gap:4px}
+.msg{padding:8px 0;border-block-end:1px solid var(--awai-border)}
+.msg p{margin:4px 0;white-space:pre-wrap;overflow-wrap:anywhere}
+.msg__meta{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.msg--reply{border:0;padding-inline-start:16px;border-inline-start:3px solid var(--awai-border)}
+.compose{display:flex;gap:8px;align-items:center;padding-block:8px}
+.compose input{flex:1;min-inline-size:0}
+.tabs{display:grid;grid-template-columns:repeat(5,1fr);max-inline-size:640px;margin-inline:auto}
+.foot{margin-block-start:48px;display:flex;flex-direction:column;gap:8px;align-items:flex-start}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}

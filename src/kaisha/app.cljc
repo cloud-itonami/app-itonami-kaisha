@@ -1,0 +1,226 @@
+(ns kaisha.app
+  "アプリの状態と操作。すべて純粋な関数で、画面（kaisha.ui）と test が同じ関数を使う。
+
+  状態は端末の中だけにある。外部への送信・提出・署名はしない（descriptor の operations は空）。
+  受け付けた操作は :audit に残す（誰が・いつ・何を）。"
+  (:require [kaisha.books :as books]
+            [kaisha.chat :as chat]
+            [kaisha.company :as co]
+            [kaisha.date :as d]
+            [kaisha.meeting :as mt]
+            [kaisha.ringi :as ringi]))
+
+(def schema "itonami.kaisha.state.v1")
+
+(defn sample
+  "初回に表示する架空の会社。実在の会社・人物ではない。"
+  []
+  (let [members [{:member/id "yamada" :member/name "山田 一郎" :member/permissions [:approve :post]}
+                 {:member/id "sato" :member/name "佐藤 花子" :member/permissions [:approve :post]}
+                 {:member/id "suzuki" :member/name "鈴木 次郎" :member/permissions [:approve :post]}
+                 {:member/id "takahashi" :member/name "高橋 三郎" :member/permissions [:post]}
+                 {:member/id "ito" :member/name "伊藤 由紀" :member/permissions [:post]}]]
+    {:schema schema
+     :fixture true
+     :me "ito"
+     :company {:company/id "fixture-kk"
+               :company/name "架空商事株式会社"
+               :company/form :kk
+               :company/public? false
+               :company/board? true
+               :company/auditor? true
+               :company/fy-end-month 3
+               :company/agm-within-months 3
+               :company/articles {:director-term-years 2 :auditor-term-years 4}
+               :company/approval-policy ringi/default-policy
+               :company/members members
+               :company/officers
+               [{:officer/id "yamada" :officer/name "山田 一郎" :officer/roles [:representative-director] :officer/elected-on "2025-06-26"}
+                {:officer/id "sato" :officer/name "佐藤 花子" :officer/roles [:director] :officer/elected-on "2025-06-26"}
+                {:officer/id "suzuki" :officer/name "鈴木 次郎" :officer/roles [:director] :officer/elected-on "2025-06-26"}
+                {:officer/id "takahashi" :officer/name "高橋 三郎" :officer/roles [:auditor] :officer/elected-on "2023-06-28"}]}
+     :space (-> {:channels {} :read {}}
+                (chat/add-channel (chat/channel "general" {:name "全体"}))
+                (chat/add-channel (chat/channel "board" {:name "取締役会" :visibility :private
+                                                         :members ["yamada" "sato" "suzuki" "takahashi"]}))
+                (chat/add-channel (chat/channel "keiri" {:name "経理"})))
+     :meetings [{:meeting/id "board-2026-12"
+                 :meeting/body :board
+                 :meeting/title "12月 定例取締役会"
+                 :meeting/date "2026-12-10"
+                 :meeting/agenda [{:agenda/id "a1" :agenda/title "本社の賃貸借契約の更新" :agenda/matter :board-general}]}
+                {:meeting/id "agm-2027"
+                 :meeting/body :shareholders
+                 :meeting/title "第3期 定時株主総会"
+                 :meeting/date "2027-06-25"
+                 :meeting/agenda [{:agenda/id "a1" :agenda/title "計算書類の承認" :agenda/matter :approve-financials}
+                                  {:agenda/id "a2" :agenda/title "取締役 3 名の選任" :agenda/matter :elect-officer}]}]
+     :ringi []
+     :financials {:fs/rows [] :fs/history []}
+     :registrations []
+     :audit []}))
+
+(defn find-by [k id xs] (some #(when (= id (get % k)) %) xs))
+
+(defn- update-by [state coll k id f]
+  (update state coll (fn [xs] (mapv #(if (= id (get % k)) (f %) %) xs))))
+
+(defn resolution-ref
+  "会議の議題から、稟議・計算書類に渡す決議の参照を作る。"
+  [state meeting-id agenda-id]
+  (let [m (find-by :meeting/id meeting-id (:meetings state))
+        a (find-by :agenda/id agenda-id (:meeting/agenda m))]
+    (when (and m a (:agenda/result a))
+      {:id (str meeting-id "/" agenda-id)
+       :body (:meeting/body m)
+       :matter (:agenda/matter a)
+       :result (:agenda/result a)})))
+
+(defn- ok [state] {:state state})
+(defn- err [state code & {:as more}] (merge {:state state :error code} more))
+
+(defn- step [state {:keys [type on] :as ev}]
+  (let [c (:company state)
+        me (:me state)]
+    (case type
+      :session/as
+      (if (find-by :member/id (:member ev) (:company/members c))
+        (ok (assoc state :me (:member ev)))
+        (err state :unknown-member))
+
+      :company/set
+      (let [c2 (merge c (:patch ev))
+            problems (filter #(= :error (:severity %)) (co/validate c2))]
+        (if (seq problems)
+          (err state :invalid-company :problems (vec problems))
+          (ok (assoc state :company c2))))
+
+      :officer/verify
+      (if (and (find-by :officer/id (:id ev) (:company/officers c)) (d/valid? on))
+        (ok (update-in state [:company :company/officers]
+                       (fn [os] (mapv #(if (= (:id ev) (:officer/id %))
+                                         (assoc % :officer/authority-verified-on on) %) os))))
+        (err state :unknown-officer))
+
+      :meeting/add
+      (let [m (:meeting ev)]
+        (cond
+          (not (#{:board :shareholders} (:meeting/body m))) (err state :invalid-meeting)
+          (not (d/valid? (:meeting/date m))) (err state :missing-meeting-date)
+          (find-by :meeting/id (:meeting/id m) (:meetings state)) (err state :duplicate-meeting)
+          (and (= :board (:meeting/body m)) (not (:company/board? c))) (err state :no-board)
+          (not (every? #(mt/matter-valid? (:meeting/body m) (:agenda/matter %)) (:meeting/agenda m)))
+          (err state :invalid-matter)
+          :else (ok (update state :meetings conj (update m :meeting/agenda #(vec (or % [])))))))
+
+      :meeting/notice-sent
+      (if (and (find-by :meeting/id (:id ev) (:meetings state)) (d/valid? on))
+        (ok (update-by state :meetings :meeting/id (:id ev) #(assoc % :meeting/notice-sent-on on)))
+        (err state :unknown-meeting))
+
+      :meeting/vote
+      (let [m (find-by :meeting/id (:id ev) (:meetings state))
+            a (find-by :agenda/id (:agenda ev) (:meeting/agenda m))
+            notice (when m (mt/notice-check c m))
+            result (when a
+                     (if (= :board (:meeting/body m))
+                       (mt/resolve-board c (:vote ev))
+                       (mt/resolve-shareholders c (assoc (:vote ev) :matter (:agenda/matter a)))))]
+        (cond
+          (nil? a) (err state :unknown-agenda)
+          (not= :ok (:status notice)) (err state :notice-not-satisfied :notice notice)
+          (#{:blocked :undetermined} (:status result)) (err state :vote-not-countable :result result)
+          :else (ok (update-by state :meetings :meeting/id (:id ev)
+                               (fn [m] (update m :meeting/agenda
+                                               (fn [as] (mapv #(if (= (:agenda ev) (:agenda/id %))
+                                                                 (assoc % :agenda/vote (:vote ev) :agenda/result result) %)
+                                                              as))))))))
+
+      :ringi/create
+      (let [r (:ringi ev)]
+        (cond
+          (find-by :ringi/id (:ringi/id r) (:ringi state)) (err state :duplicate-ringi)
+          (not (and (integer? (:ringi/amount r)) (not (neg? (:ringi/amount r))))) (err state :invalid-amount)
+          :else (ok (update state :ringi conj (assoc r :ringi/drafter me :ringi/decisions [])))))
+
+      :ringi/submit
+      (let [r (find-by :ringi/id (:id ev) (:ringi state))]
+        (cond (nil? r) (err state :unknown-ringi)
+              (not= me (:ringi/drafter r)) (err state :not-drafter)
+              (:ringi/submitted-on r) (err state :already-submitted)
+              :else (ok (update-by state :ringi :ringi/id (:id ev) #(assoc % :ringi/submitted-on on)))))
+
+      :ringi/decide
+      (let [r (find-by :ringi/id (:id ev) (:ringi state))
+            res (when r (ringi/decide c r {:by me :decision (:decision ev) :on on}))]
+        (cond (nil? r) (err state :unknown-ringi)
+              (:error res) (err state (:error res))
+              :else (ok (update-by state :ringi :ringi/id (:id ev) (constantly (:ok res))))))
+
+      :ringi/link-board
+      (let [r (find-by :ringi/id (:id ev) (:ringi state))
+            ref (resolution-ref state (:meeting ev) (:agenda ev))
+            res (when (and r ref (= :board (:body ref))) (ringi/link-board-resolution c r ref))]
+        (cond (nil? r) (err state :unknown-ringi)
+              (or (nil? ref) (not= :board (:body ref))) (err state :board-resolution-required)
+              (:error res) (err state (:error res))
+              :else (ok (update-by state :ringi :ringi/id (:id ev) (constantly (:ok res))))))
+
+      :books/import
+      (let [{:keys [rows errors]} (books/parse-trial-balance (:csv ev))]
+        (cond (seq (:fs/history (:financials state))) (err state :financials-in-progress)
+              (seq errors) (err state :invalid-trial-balance :errors errors)
+              (empty? rows) (err state :no-trial-balance)
+              :else (ok (assoc state :financials {:fs/rows rows :fs/history [] :fs/imported-on on}))))
+
+      :books/advance
+      (let [ref (when (:meeting ev) (resolution-ref state (:meeting ev) (:agenda ev)))
+            res (books/advance c (:financials state)
+                               {:step (:step ev) :on on :actor me :resolution ref})]
+        (if (:error res)
+          (err state (:error res))
+          (ok (assoc state :financials (:ok res)))))
+
+      :registration/add
+      (if (and (seq (:title ev)) (d/valid? (:change-on ev)))
+        (ok (update state :registrations (fnil conj []) {:title (:title ev) :on (:change-on ev)}))
+        (err state :invalid-registration))
+
+      :chat/post
+      (let [space (:space state)
+            n (count (mapcat :channel/messages (vals (:channels space))))
+            res (chat/post space (:channel ev)
+                           (cond-> {:message/id (str "m" (inc n) "-" (:at ev))
+                                    :message/author me
+                                    :message/body (:body ev)
+                                    :message/at (:at ev)}
+                             (:parent ev) (assoc :message/parent (:parent ev))
+                             (:ref ev) (assoc :message/ref (:ref ev))))]
+        (if (:error res) (err state (:error res)) (ok (assoc state :space (:ok res)))))
+
+      :chat/read
+      (ok (update state :space chat/mark-read me (:channel ev) (:at ev)))
+
+      :chat/open-dm
+      (if (and (find-by :member/id (:with ev) (:company/members c)))
+        (ok (update state :space chat/open-dm me (:with ev)))
+        (err state :unknown-member))
+
+      (err state :unknown-event))))
+
+(def ^:private unaudited #{:chat/read :session/as})
+
+(defn dispatch
+  "操作を 1 つ適用する。返り値 {:state s} または {:state 元の s :error kw ...}。"
+  [state ev]
+  (let [res (step state ev)]
+    (if (or (:error res) (unaudited (:type ev)))
+      res
+      (update-in res [:state :audit] (fnil conj [])
+                 {:at (or (:at ev) (:on ev)) :actor (:me state) :type (:type ev)
+                  :target (or (:id ev) (:channel ev) (get-in ev [:ringi :ringi/id])
+                              (get-in ev [:meeting :meeting/id]))}))))
+
+(defn valid-state? [s]
+  (and (map? s) (= schema (:schema s)) (map? (:company s)) (map? (:space s))
+       (vector? (:meetings s)) (vector? (:ringi s))))
