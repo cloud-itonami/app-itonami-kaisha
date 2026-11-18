@@ -1,7 +1,7 @@
 {
   "schema": "kaisha.vendor.awai-ds-status.v1",
   "source": "Figma umqCqP5KSjLWh9fhCI1HaN, collection 'Awai DS · market & status' (VariableCollectionId:311:1995), read 2026-11-18 (AWAI-3446)",
-  "icons": "web/icons/*.svg: Android v2 / Icon / calendar (193:230), chat (193:209); Kaisha / Icon / meeting (319:1717), approval (319:1726), ledger (319:1733); back (193:219)",
+  "icons": "web/icons/*.svg: Android v2 / Icon / calendar (193:230), chat (193:209); Kaisha / Icon / meeting (319:1717), approval (319:1726), ledger (319:1733); back (193:219); settings (193:214), chevron (193:250)",
   "colors": {
     "up": {
       "variable": "market/up",

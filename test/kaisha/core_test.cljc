@@ -233,6 +233,33 @@
             (let [s (:state (app/dispatch s {:type :ringi/link-board :id "r1" :meeting "board-loan" :agenda "a1"}))]
               (is (= :approved (ringi/status (:company s) (app/find-by :ringi/id "r1" (:ringi s))))))))))))
 
+(deftest settings-ops
+  (let [s (app/sample)]
+    (testing "役員の追加: 変更登記の期限を予定に出す（915条）"
+      (let [r (app/dispatch s {:type :officer/add :on "2026-11-18"
+                               :officer {:officer/id "kato" :officer/name "加藤 四郎" :officer/roles [:director] :officer/elected-on "2026-11-20"}})]
+        (is (nil? (:error r)))
+        (is (= "加藤 四郎" (:officer/name (last (get-in r [:state :company :company/officers])))))
+        (is (some #(= "2026-12-04" (:date %)) (filter #(= :registration (:kind %)) (dl/upcoming (:state r) "2026-11-18" 60))))))
+    (testing "役員の追加の負の対照"
+      (is (= [:duplicate-officer] (map :code (:problems (app/dispatch s {:type :officer/add :officer {:officer/id "yamada" :officer/name "x" :officer/roles [:director] :officer/elected-on "2026-11-20"}})))))
+      (is (some #{:invalid-role} (map :code (:problems (app/dispatch s {:type :officer/add :officer {:officer/id "x" :officer/name "x" :officer/roles [:representative-member] :officer/elected-on "2026-11-20"}})))))
+      (is (some #{:missing-election-date} (map :code (:problems (app/dispatch s {:type :officer/add :officer {:officer/id "x" :officer/name "x" :officer/roles [:director]}})))))
+      (is (some #{:no-auditor-seat} (map :code (:problems (app/dispatch (assoc-in s [:company :company/auditor?] false) {:type :officer/add :officer {:officer/id "x" :officer/name "x" :officer/roles [:auditor] :officer/elected-on "2026-11-20"}}))))))
+    (testing "メンバー: 追加と権限の変更"
+      (let [s2 (:state (app/dispatch s {:type :member/add :member {:member/id "kimura" :member/name "木村 五郎" :member/permissions [:post]}}))]
+        (is (= [:post] (:member/permissions (app/find-by :member/id "kimura" (get-in s2 [:company :company/members])))))
+        (is (= :duplicate-member (:error (app/dispatch s2 {:type :member/add :member {:member/id "kimura" :member/name "x"}}))))
+        (is (= [:approve :post] (:member/permissions (app/find-by :member/id "kimura" (get-in (:state (app/dispatch s2 {:type :member/set-permissions :id "kimura" :permissions [:post :approve]})) [:company :company/members])))))
+        (is (= :invalid-permission (:error (app/dispatch s2 {:type :member/set-permissions :id "kimura" :permissions [:sign]}))))))
+    (testing "定款の設定の負の対照"
+      (let [set-arts (fn [m] (app/dispatch s {:type :company/set :patch {:company/articles (merge (get-in s [:company :company/articles]) m)}}))]
+        (is (some #{:director-term-out-of-range} (map :code (:problems (set-arts {:director-term-years 11})))))
+        (is (some #{:notice-shortening-not-allowed} (map :code (:problems (set-arts {:shareholder-notice-days 3})))))
+        (is (some #{:quorum-below-one-third} (map :code (:problems (set-arts {:quorum {:officer [1 4]}})))))
+        (is (some #{:board-notice-out-of-range} (map :code (:problems (set-arts {:board-notice-days 0})))))
+        (is (nil? (:error (set-arts {:director-term-years 10 :board-notice-days 5 :quorum {:officer [1 3] :ordinary :none}}))))))))
+
 (deftest i18n-complete
   (is (= {:ja-only [] :en-only []} (kaisha.i18n/missing-keys))))
 

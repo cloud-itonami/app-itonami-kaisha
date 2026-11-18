@@ -88,12 +88,17 @@
   (let [ev (merge {:on (today) :at (now)} ev)
         res (app/dispatch @state ev)]
     (if (:error res)
-      (swap! ui assoc :error (:error res))
-      (do (reset! state (:state res)) (save! (:state res)) (swap! ui assoc :error nil)))
+      (swap! ui assoc :error (:error res) :problems (:problems res))
+      (do (reset! state (:state res)) (save! (:state res)) (swap! ui assoc :error nil :problems nil)))
     (render!)
     (not (:error res))))
 
-(defn- go! [& kvs] (apply swap! ui assoc :error nil kvs) (render!) (.scrollTo js/window 0 0))
+(defn- go! [& kvs]
+  (apply swap! ui assoc :error nil :problems nil kvs)
+  (render!)
+  (.scrollTo js/window 0 0)
+  (when (:confirm-reset @ui)
+    (some-> (.querySelector js/document ".dialog button") .focus)))
 
 (defn- form-values [^js e]
   (.preventDefault e)
@@ -576,58 +581,335 @@
          [:span {:class "compose__input"} [:input {:name "body" :required true :placeholder (t :chat/placeholder-short)}]]
          (btn :primary (t :chat/send) nil {:type "submit"})])))))
 
+;; ---------------------------------------------------------------- 設定（U1〜U5・V1〜V3、AWAI-3449）
+
+(defn- app-bar [{:keys [title subtitle on-back on-settings]}]
+  [:header {:class "app-bar"}
+   (when on-back [:button {:class "icon-button app-bar__back" :type "button" :aria-label (t :common/back) :on-click on-back} (icon "back")])
+   [:div {:class "app-bar__text"} [:h1 title] [:p subtitle]]
+   (when on-settings [:button {:class "icon-button" :type "button" :aria-label (t :settings/open) :on-click on-settings} (icon "settings")])])
+
+(defn- section [title & children] (into [:section {:class "section"} [:h2 title]] children))
+
+(defn- settings-row
+  "Kaisha / Settings row。on-click がなければ表示だけ（矢印を出さない）。"
+  [title detail on-click]
+  (if on-click
+    [:button {:class "settings-row" :type "button" :on-click on-click}
+     [:span {:class "settings-row__text"} [:span {:class "settings-row__title"} title] (when detail [:span {:class "settings-row__detail"} detail])]
+     (icon "chevron")]
+    [:div {:class "settings-row"}
+     [:span {:class "settings-row__text"} [:span {:class "settings-row__title"} title] (when detail [:span {:class "settings-row__detail"} detail])]]))
+
+(defn- choice
+  "DS / Segment を radio で。"
+  [nm label options selected & [note]]
+  [:fieldset {:class "choice"}
+   [:legend {:class "field__label"} label]
+   [:div {:class "segments"}
+    (for [[v l] options]
+      [:label {:class "segment-radio"}
+       [:input {:type "radio" :name nm :value (name v) :checked (= v selected)}]
+       [:span {:class "segment"} l]])]
+   (when note (caption note))])
+
+(defn- problem-text [{:keys [code limit]}]
+  (let [k (keyword "problem" (name code))]
+    (if (has-msg? k) (t k {:limit limit}) (t :error/generic {:code (name code)}))))
+
+(def ^:private problem-field
+  {:director-term-out-of-range "director" :auditor-term-out-of-range "auditor"
+   :notice-shortening-not-allowed "shareholder" :board-notice-out-of-range "board"
+   :quorum-below-one-third "officer-quorum" :missing-name "name"})
+
+(defn- show-problems!
+  "入力中の誤りを Banner と項目の下の文に出し、誤りがあれば保存ボタンを無効にする。"
+  [^js form problems]
+  (let [errors (filter #(= :error (:severity %)) problems)]
+    (.replaceChildren (.querySelector form "[data-problems]")
+                      (h (when (seq errors) (banner :error (t :problem/title) (str/join " " (map problem-text errors))))))
+    (doseq [^js el (array-seq (.querySelectorAll form "[data-problem-for]"))]
+      (let [p (some #(when (= (.getAttribute el "data-problem-for") (problem-field (:code %))) %) errors)]
+        (set! (.-textContent el) (if p (str "✕ " (problem-text p)) ""))))
+    (set! (.-disabled (.querySelector form "[data-save]")) (boolean (seq errors)))))
+
+(defn- int-or-nil [v] (when (and v (not= "" v)) (let [n (js/parseInt v 10)] (when-not (js/isNaN n) n))))
+
+(defn- company-patch [^js fd]
+  {:company/name (str/trim (or (.get fd "name") ""))
+   :company/form (keyword (.get fd "form"))
+   :company/public? (= "yes" (.get fd "public"))
+   :company/board? (= "yes" (.get fd "board"))
+   :company/auditor? (= "yes" (.get fd "auditor"))
+   :company/fy-end-month (int-or-nil (.get fd "fy"))
+   :company/agm-within-months (int-or-nil (.get fd "agm"))})
+
+(defn- articles-patch [c ^js fd]
+  (let [arts (:company/articles c)
+        q (cond-> {}
+            (= "excluded" (.get fd "ordinary")) (assoc :ordinary :none)
+            (= "one-third" (.get fd "officer")) (assoc :officer [1 3])
+            (get-in arts [:quorum :special]) (assoc :special (get-in arts [:quorum :special])))
+        put (fn [m k v] (if (some? v) (assoc m k v) (dissoc m k)))]
+    {:company/articles
+     (-> arts
+         (put :director-term-years (int-or-nil (.get fd "director")))
+         (cond-> (.get fd "auditor") (put :auditor-term-years (int-or-nil (.get fd "auditor"))))
+         (cond-> (some? (.get fd "board")) (put :board-notice-days (int-or-nil (.get fd "board"))))
+         (cond-> (some? (.get fd "shareholder")) (put :shareholder-notice-days (int-or-nil (.get fd "shareholder"))))
+         (put :quorum (not-empty q)))}))
+
+(defn- live-form [patch-fn content]
+  (let [c (:company @state)
+        check (fn [^js e] (let [f (.-currentTarget e)] (show-problems! f (co/validate (merge c (patch-fn c (js/FormData. f)))))))]
+    (into [:form {:class "form"
+                  :on-input check :on-change check
+                  :on-submit (fn [^js e]
+                               (.preventDefault e)
+                               (when (act! {:type :company/set :patch (patch-fn c (js/FormData. (.-target e)))})
+                                 (go! :screen :settings)))}
+           [:div {:data-problems true}]]
+          (concat content [[:button {:class "awai-button awai-button--primary" :type "submit" :data-save true} (t :common/save)]]))))
+
+(defn- problem-slot [k] [:p {:class "caption problem" :data-problem-for k :aria-live "polite"}])
+
+(defn- company-summary [c]
+  (t :company/summary {:form (t (keyword "form" (name (:company/form c))))
+                       :public (t (if (:company/public? c) :company/public-yes :company/public-no))
+                       :organs (t (cond (and (:company/board? c) (:company/auditor? c)) :company/organs-both
+                                        (:company/board? c) :company/organs-board
+                                        (:company/auditor? c) :company/organs-auditor
+                                        :else :company/organs-none))
+                       :m (:company/fy-end-month c)}))
+
+(defn- settings-list []
+  (let [s @state c (:company s)
+        reps (filter #(some #{:representative-director :representative-member} (:officer/roles %)) (:company/officers c))
+        arts (:company/articles c)
+        policy (or (seq (:company/approval-policy c)) ringi/default-policy)]
+    (list
+     (section (t :settings/acting-heading)
+              (field (t :app/acting-as)
+                     [:select {:on-change #(act! {:type :session/as :member (.. % -target -value)})}
+                      (for [m (:company/members c)]
+                        [:option {:value (:member/id m) :selected (= (:me s) (:member/id m))} (:member/name m)])] "▾")
+              (caption (t :settings/acting-note)))
+     (section (t :settings/display)
+              [:fieldset {:class "choice"}
+               [:legend {:class "field__label"} (t :settings/language)]
+               [:div {:class "segments"}
+                (for [[l label] [[:ja "日本語"] [:en "English"]]]
+                  [:button {:class "segment" :type "button" :aria-pressed (str (= l (:lang @ui)))
+                            :on-click #(do (swap! ui assoc :lang l) (render!))} label])]
+               (caption (t :settings/theme-note))])
+     (section (t :settings/company)
+              [:div {:class "settings-list"}
+               (settings-row (t :settings/row-company) (company-summary c) #(go! :screen :company))
+               (settings-row (t :settings/row-articles)
+                             (if (co/kk? c)
+                               (t :settings/summary-articles {:director (co/term-years c :director) :auditor (co/term-years c :auditor)
+                                                              :board (mt/board-notice-days c)})
+                               "—")
+                             (when (co/kk? c) #(go! :screen :articles)))
+               (settings-row (t :settings/row-officers)
+                             (t :settings/summary-officers {:n (count (:company/officers c)) :reps (count reps)
+                                                            :ok (count (filter #(d/valid? (:officer/authority-verified-on %)) reps))})
+                             #(go! :screen :officers))
+               (settings-row (t :settings/row-members)
+                             (t :settings/summary-members {:n (count (:company/members c))
+                                                           :approvers (count (filter #(some #{:approve} (:member/permissions %)) (:company/members c)))})
+                             #(go! :screen :members))
+               (settings-row (t :settings/row-policy)
+                             (str/join " · " (for [{:keys [up-to approvers]} policy]
+                                               (if up-to (t :settings/policy-up-to {:amount (yen up-to) :n approvers})
+                                                   (t :settings/policy-above {:n approvers}))))
+                             nil)])
+     (section (t :settings/law)
+              [:div {:class "chips"} (chip :info (t :app/review))]
+              (caption (t :settings/law-detail {:n (count law/sources) :date (:pack/checked-on law/pack) :review (:pack/review-by law/pack)})))
+     (section (t :settings/data)
+              (caption (t :app/saved-locally) "text")
+              (btn :primary (t :reset/confirm) #(go! :confirm-reset true) {:destructive? true})))))
+
+(defn- company-view []
+  (let [c (:company @state)
+        yn (fn [nm label v & [note]] (choice nm label [[:yes (t :present)] [:no (t :absent)]] (if v :yes :no) note))]
+    (live-form (fn [_ fd] (company-patch fd))
+               [(field (t :company/name) [:input {:name "name" :value (:company/name c) :required true}])
+                (problem-slot "name")
+                (choice "form" (t :company/form) [[:kk (t :form/kk)] [:godo (t :form/godo)]] (:company/form c) (t :company/form-note))
+                (choice "public" (t :company/public) [[:no (t :no)] [:yes (t :yes)]] (if (:company/public? c) :yes :no) (t :company/public-note))
+                (yn "board" (t :company/board) (:company/board? c))
+                (yn "auditor" (t :company/auditor) (:company/auditor? c))
+                (field (t :company/fy-month) (select "fy" (for [m (range 1 13)] [(keyword (str m)) (t :company/month {:m m})]) (keyword (str (:company/fy-end-month c)))) "▾")
+                [:div {:class "field-group"}
+                 (field (t :company/agm) (select "agm" (for [m [1 2 3]] [(keyword (str m)) (t :company/agm-option {:m m})]) (keyword (str (or (:company/agm-within-months c) 3)))) "▾")
+                 (caption (t :company/agm-note))]])))
+
+(defn- articles-view []
+  (let [c (:company @state) arts (:company/articles c)
+        fixed? (or (:company/public? c) (:company/board? c))]
+    (live-form articles-patch
+               [[:div {:class "field-group"}
+                 (field (t :articles/director) [:input {:name "director" :type "number" :min 1 :max 10 :step 1 :inputmode "numeric" :value (co/term-years c :director)}] (t :unit/years))
+                 (problem-slot "director") (caption (t :articles/director-note))]
+                (when (:company/auditor? c)
+                  [:div {:class "field-group"}
+                   (field (t :articles/auditor) [:input {:name "auditor" :type "number" :min 4 :max 10 :step 1 :inputmode "numeric" :value (co/term-years c :auditor)}] (t :unit/years))
+                   (problem-slot "auditor") (caption (t :articles/auditor-note))])
+                [:div {:class "field-group"}
+                 (if fixed?
+                   (list (stat (t :articles/shareholder-notice) (t :articles/shareholder-fixed {:days (mt/shareholder-notice-days c {})}))
+                         (caption (t :articles/shareholder-fixed-note)))
+                   (list (field (t :articles/shareholder-notice) [:input {:name "shareholder" :type "number" :min 0 :max 7 :step 1 :inputmode "numeric" :value (:shareholder-notice-days arts)}] (t :unit/days))
+                         (problem-slot "shareholder") (caption (t :articles/shareholder-short-note))))]
+                (when (:company/board? c)
+                  [:div {:class "field-group"}
+                   (field (t :articles/board-notice) [:input {:name "board" :type "number" :min 1 :max 7 :step 1 :inputmode "numeric" :value (mt/board-notice-days c)}] (t :unit/days))
+                   (problem-slot "board") (caption (t :articles/board-notice-note))])
+                (choice "ordinary" (t :articles/ordinary-quorum) [[:majority (t :articles/majority)] [:excluded (t :articles/excluded)]]
+                        (if (= :none (get-in arts [:quorum :ordinary])) :excluded :majority) (t :articles/ordinary-note))
+                [:div {:class "field-group"}
+                 (field (t :articles/officer-quorum) (select "officer" [[:majority (t :articles/majority)] [:one-third (t :articles/one-third)]]
+                                                             (if (get-in arts [:quorum :officer]) :one-third :majority)) "▾")
+                 (problem-slot "officer-quorum") (caption (t :articles/officer-note))]])))
+
+(defn- officers-view []
+  (let [c (:company @state)
+        roles (get co/officer-roles-by-form (:company/form c))
+        rep (some #(when (some #{:representative-director :representative-member} (:officer/roles %)) %) (:company/officers c))
+        rep-status (when rep (co/representative? c (:officer/id rep)))]
+    (list
+     [:div {:class "settings-list"}
+      (for [o (:company/officers c) :let [term (co/officer-term c o)]]
+        (settings-row (:officer/name o)
+                      (t :officers/row {:role (str/join "・" (map #(t (keyword "role" (name %))) (:officer/roles o)))
+                                        :elected (:officer/elected-on o)
+                                        :expiry (if (= :ok (:status term)) (t :officers/expiry {:date (:latest-expiry term)}) "")})
+                      nil))]
+     (when (and rep (= :unverified (:status rep-status)))
+       (list [:div {:class "chips"} (chip :warning (t :officers/rep-unverified {:name (:officer/name rep)}))]
+             (btn :tonal (t :officer/verify) #(act! {:type :officer/verify :id (:officer/id rep)}))))
+     (caption (t :officers/note))
+     [:details {:class "disclosure"}
+      [:summary {:class "awai-button awai-button--primary"} (t :officers/add)]
+      [:form {:class "form"
+              :on-submit #(let [v (form-values %)]
+                            (act! {:type :officer/add
+                                   :officer {:officer/id (str "o-" (now)) :officer/name (str/trim (:name v))
+                                             :officer/roles [(keyword (:role v))] :officer/elected-on (:elected v)}}))}
+       (field (t :officers/name) [:input {:name "name" :required true}])
+       (field (t :officers/role) (select "role" (for [r (sort roles)] [r (t (keyword "role" (name r)))])) "▾")
+       (field (t :officers/elected) [:input {:name "elected" :type "date" :required true}])
+       (btn :primary (t :common/add) nil {:type "submit"})]])))
+
+(defn- perm-label [perms]
+  (if (seq perms) (str/join " · " (map #(t (keyword "perm" (name %))) (sort perms))) (t :members/none)))
+
+(defn- perm-checks [selected]
+  [:fieldset {:class "checks"}
+   (for [p [:approve :post]]
+     [:label [:input {:type "checkbox" :name "perm" :value (name p) :checked (contains? (set selected) p)}] (t (keyword "perm" (name p)))])])
+
+(defn- members-view []
+  (let [c (:company @state)]
+    (list
+     [:div {:class "settings-list"}
+      (for [m (:company/members c)]
+        [:details {:class "settings-row-detail"}
+         [:summary {:class "settings-row"}
+          [:span {:class "settings-row__text"} [:span {:class "settings-row__title"} (:member/name m)]
+           [:span {:class "settings-row__detail"} (perm-label (:member/permissions m))]]
+          (icon "chevron")]
+         [:form {:class "form" :on-submit #(let [fd (js/FormData. (.-target %))]
+                                             (.preventDefault %)
+                                             (act! {:type :member/set-permissions :id (:member/id m)
+                                                    :permissions (map keyword (js->clj (.getAll fd "perm")))}))}
+          (perm-checks (:member/permissions m))
+          (btn :tonal (t :common/save) nil {:type "submit"})]])]
+     (caption (t :members/note))
+     [:details {:class "disclosure"}
+      [:summary {:class "awai-button awai-button--primary"} (t :members/add)]
+      [:form {:class "form" :on-submit #(let [fd (js/FormData. (.-target %))]
+                                          (.preventDefault %)
+                                          (act! {:type :member/add
+                                                 :member {:member/id (str "m-" (now)) :member/name (str/trim (or (.get fd "name") ""))
+                                                          :member/permissions (map keyword (js->clj (.getAll fd "perm")))}}))}
+       (field (t :members/name) [:input {:name "name" :required true}])
+       (perm-checks [:post])
+       (btn :primary (t :common/add) nil {:type "submit"})]])))
+
+(def ^:private screens
+  {:settings {:title :settings/title :parent nil}
+   :company {:title :settings/row-company :parent :settings}
+   :articles {:title :settings/row-articles :parent :settings}
+   :officers {:title :settings/row-officers :parent :settings}
+   :members {:title :settings/row-members :parent :settings}})
+
+(defn- reset-dialog []
+  [:div {:class "scrim" :on-keydown #(when (= "Escape" (.-key %)) (go! :confirm-reset false))}
+   [:div {:class "dialog" :role "alertdialog" :aria-modal "true" :aria-labelledby "reset-title" :aria-describedby "reset-body"}
+    [:h2 {:id "reset-title"} (t :reset/title)]
+    [:p {:id "reset-body"} (t :reset/body)]
+    [:div {:class "dialog__actions"}
+     (btn :text (t :common/cancel) #(go! :confirm-reset false))
+     (btn :primary (t :reset/confirm)
+          #(let [s (app/sample)] (reset! state s) (save! s) (go! :confirm-reset false :screen nil :vote nil :tab :home))
+          {:destructive? true})]]])
+
+(defn- error-banner []
+  (when-let [e (:error @ui)]
+    (let [k (keyword "error" (name e)) b (keyword "error-body" (name e))
+          problems (:problems @ui)]
+      (banner :error (if (has-msg? k) (t k) (t :error/generic {:code (name e)}))
+              (cond (seq problems) (str/join " " (map problem-text problems))
+                    (has-msg? b) (t b))))))
+
 ;; ---------------------------------------------------------------- 全体
 
 (def tabs [[:home "calendar"] [:meetings "meeting"] [:ringi "approval"] [:books "ledger"] [:chat "chat"]])
 
-(defn- app-bar [{:keys [title subtitle on-back]}]
-  [:header {:class "app-bar"}
-   (when on-back [:button {:class "app-bar__back" :type "button" :aria-label (t :common/back) :on-click on-back} (icon "back")])
-   [:div {:class "app-bar__text"} [:h1 title] [:p subtitle]]])
-
-(defn- settings []
-  (let [s @state c (:company s)]
-    [:details {:class "disclosure settings"}
-     [:summary {:class "awai-button awai-button--text"} (t :app/settings)]
-     (field (t :app/acting-as)
-            [:select {:on-change #(act! {:type :session/as :member (.. % -target -value)})}
-             (for [m (:company/members c)]
-               [:option {:value (:member/id m) :selected (= (:me s) (:member/id m))} (:member/name m)])] "▾")
-     [:div {:class "actions"}
-      (btn :text (t :app/language) #(do (swap! ui update :lang {:ja :en :en :ja}) (render!)))
-      (btn :text (t :app/reset) #(let [s (app/sample)] (reset! state s) (save! s) (go! :vote nil)) {:destructive? true})]
-     (caption (t :app/saved-locally))]))
-
-(defn- error-banner []
-  (when-let [e (:error @ui)]
-    (let [k (keyword "error" (name e)) b (keyword "error-body" (name e))]
-      (banner :error (if (has-msg? k) (t k) (t :error/generic {:code (name e)})) (when (has-msg? b) (t b))))))
-
 (defn- view []
   (let [s @state
         vote (:vote @ui)
+        screen (:screen @ui)
         m (when vote (app/find-by :meeting/id (:meeting vote) (:meetings s)))
-        a (when m (app/find-by :agenda/id (:agenda vote) (:meeting/agenda m)))]
-    [:div {:class "shell"}
-     (if a
-       (app-bar {:title (:meeting/title m) :subtitle (matter-label (:meeting/body m) (:agenda/matter a))
-                 :on-back #(go! :vote nil)})
-       (app-bar {:title (t :app/title) :subtitle (get-in s [:company :company/name])}))
+        a (when m (app/find-by :agenda/id (:agenda vote) (:meeting/agenda m)))
+        confirm? (:confirm-reset @ui)]
+    (list
+    [:div {:class "shell" :inert confirm?}
+     (cond
+       screen (app-bar {:title (t (get-in screens [screen :title]))
+                        :subtitle (if (= screen :settings) (get-in s [:company :company/name]) (t :settings/title))
+                        :on-back #(go! :screen (get-in screens [screen :parent]))})
+       a (app-bar {:title (:meeting/title m) :subtitle (matter-label (:meeting/body m) (:agenda/matter a))
+                   :on-back #(go! :vote nil)})
+       :else (app-bar {:title (t :app/title) :subtitle (get-in s [:company :company/name])
+                       :on-settings #(go! :screen :settings)}))
      [:main {:class "content"}
-      (when-not (:storage? @ui) (banner :warning (t :storage/title) (t :storage/body)))
+      (when-not (:storage? @ui)
+        (if screen
+          (banner :warning (t :storage/title) (t :storage/body-settings))
+          (banner :warning (t :storage/title) (t :storage/body))))
       (error-banner)
-      (if a
-        (vote-view)
-        (list
-         (case (:tab @ui)
-           :home (home-view) :meetings (meetings-view) :ringi (ringi-view) :books (books-view) :chat (chat-view))
-         (settings)))]
-     [:nav {:class "tabs" :aria-label "Kaisha"}
-      (for [[k ic] tabs]
-        [:a {:href (str "#" (name k)) :class "tab" :aria-current (when (and (= k (:tab @ui)) (not a)) "page")
-             :on-click #(do (.preventDefault %) (go! :tab k :vote nil))}
-         [:span {:class "tab__indicator"} (icon ic)]
-         [:span {:class "tab__label"} (t (keyword "tab" (name k)))]])]]))
+      (case screen
+        :settings (settings-list)
+        :company (company-view)
+        :articles (articles-view)
+        :officers (officers-view)
+        :members (members-view)
+        (if a
+          (vote-view)
+          (case (:tab @ui)
+            :home (home-view) :meetings (meetings-view) :ringi (ringi-view) :books (books-view) :chat (chat-view))))]
+     (when-not screen
+       [:nav {:class "tabs" :aria-label "Kaisha"}
+        (for [[k ic] tabs]
+          [:a {:href (str "#" (name k)) :class "tab" :aria-current (when (and (= k (:tab @ui)) (not a)) "page")
+               :on-click #(do (.preventDefault %) (go! :tab k :vote nil))}
+           [:span {:class "tab__indicator"} (icon ic)]
+           [:span {:class "tab__label"} (t (keyword "tab" (name k)))]])])]
+    (when confirm? (reset-dialog)))))
 
 (defn render! []
   (let [root (.getElementById js/document "app")
