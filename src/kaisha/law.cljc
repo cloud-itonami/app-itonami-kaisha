@@ -170,3 +170,10 @@
   [today]
   (neg? (compare (:pack/review-by pack) today)))
 
+
+(defn short-title
+  "画面に常に出す短い出典名（「会社法 第368条」）。括弧の見出しは除く。"
+  [id]
+  (let [t (:title (cite id))
+        i (.indexOf ^String t "（")]
+    (if (pos? i) (subs t 0 i) t)))

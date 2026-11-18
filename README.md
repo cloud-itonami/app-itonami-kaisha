@@ -25,6 +25,13 @@
 - `:pack/review-by`（2027-02-18）を過ぎたら見直す。
 - 代表取締役でも、登記事項証明書などで確認するまでは代表権を「未確認」と表示する。内部の役職表は代表権の証明にならない。
 
+## 画面の設計
+
+画面の構成は Figma の提案ページ [Kaisha · 法人運営 UX proposal](https://www.figma.com/design/umqCqP5KSjLWh9fhCI1HaN?node-id=319-2)（AWAI-3445）が正。コードは挙動の正。
+- `web/icons/` は、そのファイルの `Android v2 / Icon`（calendar・chat・back）と `Kaisha / Icon`（meeting・approval・ledger）を書き出した SVG。
+- `vendor/awai-ds/status.json` は、同じファイルの変数コレクション「Awai DS · market & status」の色。awai-ui のトークンにまだない。
+- 設計にない「操作する人」と言語の切り替え、架空データに戻す操作は、各タブの下の「設定」にまとめた。設定画面の設計は未着手。
+
 ## 構成
 
 | 場所 | 中身 |
@@ -32,7 +39,7 @@
 | `src/kaisha/*.cljc` | domain と規則（純粋な関数）。JVM・Babashka・ClojureScript で同じものが動く |
 | `ui/kaisha/ui.cljs` | 画面。`kaisha.app/dispatch` で状態を更新し、`localStorage` にだけ保存する |
 | `web/` | HTML と CSS。色・余白は awai-ui のトークンだけを使う |
-| `vendor/awai-ui/` | awai-os `packages/awai-ui` の固定 revision の CSS とトークン。`PINS.json` の sha256 が変わるとビルドが止まる |
+| `vendor/awai-ui/` | awai-os `packages/awai-ui` の固定 revision の CSS・トークン・Noto Sans JP（OFL）。`PINS.json` の sha256 が変わるとビルドが止まる |
 | `scripts/build.mjs` | `dist/` を組み立て、`descriptor.json`（`kotoba.app.client-runtime.v1`、operations は空）と `release.json`（sha256）を書く |
 | `src-tauri/` | Tauri 3.0.0-alpha.6 の薄い host（yotei と同じ固定）。ネットワーク・ファイル・shell の権限は持たない |
 

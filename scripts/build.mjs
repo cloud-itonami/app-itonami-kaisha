@@ -23,15 +23,25 @@ const tokens = JSON.parse(vendor['figma-android-v2.json']);
 const colors = (theme) => Object.entries(tokens.colors).map(([k, v]) => `--awai-${k}:${v[theme].hex};`).join('');
 const dim = tokens.dimensions;
 const dimCss = `--awai-radius-large:${dim['shape-large']}px;--awai-radius-medium:${dim['shape-medium']}px;--awai-space:${dim['space-compact']}px;--awai-target:${dim['target-min']}px;`;
-const awaiCss = `.awai-ui{${colors('light')}${dimCss}}\n@media(prefers-color-scheme:dark){.awai-ui:not([data-awai-theme=light]){${colors('dark')}}}\n.awai-ui[data-awai-theme=dark]{${colors('dark')}}\n` + vendor['ui.css'].toString('utf8');
+// Figma の Awai DS · market & status（vendor/awai-ds/status.json）を同じ規則で変数にする。
+const ds = JSON.parse(await readFile(resolve(root, 'vendor/awai-ds/status.json'), 'utf8'));
+const dsColors = (theme) => Object.entries(ds.colors).map(([k, v]) => `--awai-${k}:${v[theme]};`).join('');
+const awaiCss = `.awai-ui{${colors('light')}${dsColors('light')}${dimCss}}\n@media(prefers-color-scheme:dark){.awai-ui:not([data-awai-theme=light]){${colors('dark')}${dsColors('dark')}}}\n.awai-ui[data-awai-theme=dark]{${colors('dark')}${dsColors('dark')}}\n` + vendor['ui.css'].toString('utf8');
 
 await rm(out, {recursive: true, force: true});
 await mkdir(out, {recursive: true});
 await copyFile(resolve(root, 'target/app/main.js'), resolve(out, 'main.js'));
 await copyFile(resolve(root, 'web/index.html'), resolve(out, 'index.html'));
 await copyFile(resolve(root, 'web/style.css'), resolve(out, 'style.css'));
+const icons = ['calendar', 'meeting', 'approval', 'ledger', 'chat', 'back'];
+await mkdir(resolve(out, 'icons'), {recursive: true});
+for (const i of icons) await copyFile(resolve(root, `web/icons/${i}.svg`), resolve(out, `icons/${i}.svg`));
 await writeFile(resolve(out, 'awai-ui.css'), awaiCss);
 await writeFile(resolve(out, 'awai-ui-LICENSE.txt'), vendor['LICENSE']);
+// awai-ui.css の @font-face が読む Noto Sans JP（OFL）。
+await mkdir(resolve(out, 'ui-assets'), {recursive: true});
+await writeFile(resolve(out, 'ui-assets/noto-jp.woff2'), vendor['noto-jp.woff2']);
+await writeFile(resolve(out, 'ui-assets/font-OFL.txt'), vendor['font-OFL.txt']);
 
 const pkg = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
 const descriptor = {
@@ -45,7 +55,7 @@ const descriptor = {
 };
 await writeFile(resolve(out, 'descriptor.json'), JSON.stringify(descriptor, null, 2) + '\n');
 
-const names = ['index.html', 'style.css', 'main.js', 'awai-ui.css', 'awai-ui-LICENSE.txt', 'descriptor.json'];
+const names = ['index.html', 'style.css', 'main.js', 'awai-ui.css', 'awai-ui-LICENSE.txt', 'descriptor.json', 'ui-assets/noto-jp.woff2', 'ui-assets/font-OFL.txt', ...icons.map(i => `icons/${i}.svg`)];
 const files = {};
 for (const n of names) files[n] = sha(await readFile(resolve(out, n)));
 const core = {};
@@ -57,6 +67,7 @@ await writeFile(resolve(out, 'release.json'), JSON.stringify({
   version: pkg.version,
   tauri: '3.0.0-alpha.6',
   awaiUi: {source: pins.source, revision: pins.revision},
+  awaiDs: {source: ds.source, sha256: sha(await readFile(resolve(root, 'vendor/awai-ds/status.json')))},
   sharedCore: core,
   files
 }, null, 2) + '\n');

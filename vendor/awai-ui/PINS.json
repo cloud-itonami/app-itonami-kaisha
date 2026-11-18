@@ -6,6 +6,8 @@
   "files": {
     "ui.css": "2643627cac50c42a9c4338b51bbff0cf3e025160f3f48d378bd49248263d0103",
     "figma-android-v2.json": "10f6612a4a26cb7a297253eaeaddfc2dc4ec12b13d9b4718840cd7a39c70b033",
-    "LICENSE": "bf06f1cdf2de187c89c775d9faf23a225cceae915fff674dea44660698675ad5"
+    "LICENSE": "bf06f1cdf2de187c89c775d9faf23a225cceae915fff674dea44660698675ad5",
+    "noto-jp.woff2": "ed85d35a7db01e551510e0973745c17315c03ea01742d82b2bf8e5ac3bf76038",
+    "font-OFL.txt": "babcfe66c8a098b2fa279bc724a3a342f8124f77ce18941fbcc1bbb39823cded"
   }
 }
