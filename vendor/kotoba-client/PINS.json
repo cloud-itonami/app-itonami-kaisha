@@ -1,8 +1,0 @@
-{
-  "source": "kotoba-lang/kotoba lib/kotoba.wasmWebcomponent/src",
-  "revision": "a1b90e38c9e5334facfa993062e237299c70de10",
-  "files": {
-    "kotoba-client-runtime.js": "d6f67c058c5c40fc56fe500648dc79704a2eee02d4af75fc17898aad1f560a75",
-    "kotoba-client-consent.css": "4daa6055cf8ee95c6bb410335bed787c2ce738412650348920270a7a02f2e755"
-  }
-}

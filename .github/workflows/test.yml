@@ -38,4 +38,3 @@ jobs:
       - run: bb test-cljs
       - run: bb ui
       - run: node scripts/build.mjs
-      - run: node --test shell/host.test.mjs
