@@ -124,14 +124,29 @@
 
 (defn- stat [label value] [:div {:class "stat"} [:span {:class "stat__label"} label] [:span {:class "stat__value num"} value]])
 
+(defn- replay-submit!
+  "Fire the form's own submit handler. The restricted guest carries
+  form-action 'none', which stops the native submission algorithm before any
+  submit event fires, so a submit button replays it instead. Native `required`
+  checks are skipped; app/dispatch validates and shows the error."
+  [^js e]
+  (when-let [form (.closest (.-currentTarget e) "form")]
+    (.dispatchEvent form (js/Event. "submit" #js {:cancelable true}))))
+
 (defn- btn
   ([style label on-click] (btn style label on-click {}))
   ([style label on-click {:keys [destructive? disabled? type]}]
-   [:button {:class (str "awai-button awai-button--" (name style))
-             :data-destructive (when destructive? "true")
-             :disabled disabled?
-             :type (or type "button")
-             :on-click on-click} label]))
+   (if (= type "submit")
+     [:button {:class (str "awai-button awai-button--" (name style))
+               :data-destructive (when destructive? "true")
+               :disabled disabled?
+               :type "button"
+               :on-click replay-submit!} label]
+     [:button {:class (str "awai-button awai-button--" (name style))
+               :data-destructive (when destructive? "true")
+               :disabled disabled?
+               :type (or type "button")
+               :on-click on-click} label])))
 
 (defn- field
   "DS / Field: ラベルと、単位つきの入力欄。"
@@ -379,7 +394,7 @@
         [:div {:class "stats-row" :data-stats true} (seq (:stats p))]
         [:div {:class "chips" :data-preview true} (:chip p)]
         (caption (t :vote/disclaimer {:law (law/short-title law-id)}))
-        [:button {:class "awai-button awai-button--primary" :type "submit" :data-submit true} (t :meetings/record)]]))))
+        [:button {:class "awai-button awai-button--primary" :type "button" :data-submit true :on-click replay-submit!} (t :meetings/record)]]))))
 
 ;; ---------------------------------------------------------------- 稟議（K4・S5・S6）
 
@@ -808,7 +823,7 @@
                                (when (act! {:type :company/set :patch (patch-fn c (js/FormData. (.-target e)))})
                                  (go! :screen :settings)))}
            [:div {:data-problems true}]]
-          (concat content [[:button {:class "awai-button awai-button--primary" :type "submit" :data-save true} (t :common/save)]]))))
+          (concat content [[:button {:class "awai-button awai-button--primary" :type "button" :data-save true :on-click replay-submit!} (t :common/save)]]))))
 
 (defn- problem-slot [k] [:p {:class "caption problem" :data-problem-for k :aria-live "polite"}])
 
