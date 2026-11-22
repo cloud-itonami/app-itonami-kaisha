@@ -3,11 +3,26 @@
   "productName": "Kaisha",
   "version": "0.1.0",
   "identifier": "network.itonami.kaisha",
-  "build": {"frontendDist": "../dist"},
+  "build": {
+    "frontendDist": "../dist"
+  },
   "app": {
     "withGlobalTauri": false,
-    "windows": [{"label": "main", "title": "Kaisha", "width": 1024, "height": 820, "minWidth": 320, "minHeight": 480}],
-    "security": {"csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src ipc: http://ipc.localhost; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"}
+    "windows": [
+      {
+        "label": "main",
+        "title": "Kaisha",
+        "width": 1024,
+        "height": 820,
+        "minWidth": 320,
+        "minHeight": 480
+      }
+    ],
+    "security": {
+      "csp": "default-src 'none'; script-src 'self' 'sha256-JEOuT1vHljEHI0xxIewRO/7Cccry2rV3V3NYEYMlVIU=' 'sha256-25Rhoid6PTjno9iTG7UlYY8s4Zg1v8DylDQWlXPW54c='; style-src 'self' 'sha256-It4xi5qdpWS7rh4F0eA6ba9CBoorK+dBUWYxs/Og0qw='; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"
+    }
   },
-  "bundle": {"active": false}
+  "bundle": {
+    "active": false
+  }
 }
