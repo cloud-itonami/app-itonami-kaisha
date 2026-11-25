@@ -4,6 +4,7 @@
   外部への通信はしない（CSP connect-src は ipc のみ）。"
   (:require [clojure.string :as str]
             [kaisha.app :as app]
+            [kaisha.approval :as approval]
             [kaisha.books :as books]
             [kaisha.chat :as chat]
             [kaisha.company :as co]
@@ -105,8 +106,15 @@
   (apply swap! ui assoc :error nil :problems nil kvs)
   (render!)
   (.scrollTo js/window 0 0)
-  (when (:confirm-reset @ui)
+  (when (or (:confirm-reset @ui) (:approval-dialog @ui))
     (some-> (.querySelector js/document ".dialog button") .focus)))
+
+(defn- open-approval!
+  ([op ev] (open-approval! op ev {}))
+  ([op ev opts]
+   (swap! ui assoc :approval-dialog {:op op :ev ev :evidence "" :on-success (:on-success opts)})
+   (render!)
+   (some-> (.querySelector js/document ".dialog button") .focus)))
 
 (defn- form-values [^js e]
   (.preventDefault e)
@@ -193,7 +201,7 @@
        (if (= :ok (:status rep))
          (caption (t :officer/representative-ok {:date (:officer/authority-verified-on o)}))
          (list [:div {:class "chips"} (chip :warning (t :officer/representative-unverified))]
-               (btn :tonal (t :officer/verify) #(act! {:type :officer/verify :id (:officer/id o)}))))))))
+               (btn :tonal (t :officer/verify) #(open-approval! :officer.verify {:type :officer/verify :id (:officer/id o)}))))))))
 
 (defn- home-view []
   (let [s @state
@@ -303,9 +311,9 @@
 (defn- preview-shareholders
   "入力中の票数から、必要な数と判定の見込みを返す（画面の一部を差し替える）。"
   [c matter total present for]
-  (let [th (mt/shareholder-thresholds c matter total present)
-        r (when (and total present for)
-            (mt/resolve-shareholders c {:matter matter :rights-total total :rights-present present :rights-for for}))]
+  (let [p (approval/preview-shareholders c matter total present for)
+        th (:thresholds p)
+        r (:result p)]
     {:stats [(stat (t :vote/quorum {:rule (rule-label (:resolution th) :quorum)})
                    (if (:min-present th) (t :vote/at-least {:n (num-str (:min-present th))}) "—"))
              (stat (t :vote/pass {:rule (rule-label (:resolution th) :pass)})
@@ -316,12 +324,13 @@
              (= :passed (:status r)) (chip :up (t :vote/preview-pass))
              (= :quorum-not-met (:reason r)) (chip :down (t :vote/preview-quorum {:present (num-str present) :need (num-str (:min-present th))}))
              :else (chip :down (t :vote/preview-votes {:for (num-str for) :need (num-str (:min-for th))})))
-     :failed? (= :failed (:status r))}))
+     :failed? (:failed? p)}))
 
 (defn- preview-board [c present for interested]
-  (let [eligible-present (count (remove interested present))
-        th (mt/board-thresholds c interested eligible-present)
-        r (when (seq present) (mt/resolve-board c {:present present :for for :interested interested}))]
+  (let [p (approval/preview-board c present for interested)
+        th (:thresholds p)
+        r (:result p)
+        eligible-present (count (remove (set interested) (set present)))]
     {:stats [(stat (t :vote/eligible) (t :common/people {:n (:eligible th)}))
              (stat (t :vote/quorum {:rule (t :vote/rule-majority)}) (t :vote/at-least-people {:n (:min-present th)}))
              (stat (t :vote/pass {:rule (t :vote/rule-majority)}) (if (:min-for th) (t :vote/at-least-people {:n (:min-for th)}) "—"))]
@@ -329,8 +338,8 @@
              (nil? r) (chip :neutral (t :vote/preview-empty))
              (= :passed (:status r)) (chip :up (t :vote/preview-pass))
              (= :quorum-not-met (:reason r)) (chip :down (t :vote/preview-quorum {:present eligible-present :need (:min-present th)}))
-             :else (chip :down (t :vote/preview-votes {:for (count (remove interested for)) :need (:min-for th)})))
-     :failed? (= :failed (:status r))}))
+             :else (chip :down (t :vote/preview-votes {:for (count (remove (set interested) (set for))) :need (:min-for th)})))
+     :failed? (:failed? p)}))
 
 (defn- refresh-preview! [^js form board? matter]
   (let [c (:company @state)
@@ -372,11 +381,12 @@
                  (let [fd (js/FormData. (.-target e))
                        pick (fn [k] (set (js->clj (.getAll fd k))))
                        num (fn [k] (parse-count (.get fd k)))]
-                   (when (act! {:type :meeting/vote :id meeting :agenda agenda
-                                :vote (if board?
-                                        {:present (pick "present") :for (pick "for") :interested (pick "interested")}
-                                        {:rights-total (num "total") :rights-present (num "present") :rights-for (num "for")})})
-                     (go! :vote nil :tab :meetings))))}
+                   (open-approval! :meeting.vote
+                                   {:type :meeting/vote :id meeting :agenda agenda
+                                    :vote (if board?
+                                            {:present (pick "present") :for (pick "for") :interested (pick "interested")}
+                                            {:rights-total (num "total") :rights-present (num "present") :rights-for (num "for")})}
+                                   {:on-success #(go! :vote nil :tab :meetings)})))}
         (if board?
           (for [[k label] [["present" :meetings/present] ["for" :meetings/for] ["interested" :meetings/interested]]]
             [:fieldset {:class "checks"} [:legend (t label)]
@@ -430,8 +440,8 @@
        :draft (when (= me (:ringi/drafter r))
                 (btn :primary (t :ringi/submit) #(act! {:type :ringi/submit :id (:ringi/id r)})))
        :pending [:div {:class "actions"}
-                 (btn :primary (t :ringi/approve) #(act! {:type :ringi/decide :id (:ringi/id r) :decision :approve}))
-                 (btn :primary (t :ringi/reject) #(act! {:type :ringi/decide :id (:ringi/id r) :decision :reject}) {:destructive? true})]
+                 (btn :primary (t :ringi/approve) #(open-approval! :ringi.decide {:type :ringi/decide :id (:ringi/id r) :decision :approve}))
+                 (btn :primary (t :ringi/reject) #(open-approval! :ringi.decide {:type :ringi/decide :id (:ringi/id r) :decision :reject}) {:destructive? true})]
        :awaiting-board
        (let [opts (passed-board-items (:ringi/category r))]
          (if (seq opts)
@@ -445,7 +455,7 @@
                      (if (= :ok (:status sc))
                        (caption (t :ringi/signer-ok {:name (:officer/name rep) :date (:officer/authority-verified-on rep)}) "text")
                        (list (banner :warning (t :ringi/signer-unverified-title) (t :ringi/signer-unverified-body {:name (:officer/name rep)}))
-                             (btn :tonal (t :officer/verify) #(act! {:type :officer/verify :id (:officer/id rep)}))))))
+                             (btn :tonal (t :officer/verify) #(open-approval! :officer.verify {:type :officer/verify :id (:officer/id rep)}))))))
        nil)
      (source-line source))))
 
@@ -530,8 +540,9 @@
          [:form {:class "form"
                  :on-submit #(let [v (form-values %)
                                    [mid aid] (when (:ref v) (str/split (:ref v) #"\|"))]
-                               (act! (cond-> {:type :books/advance :step (:step nxt)}
-                                       mid (assoc :meeting mid :agenda aid))))}
+                               (open-approval! :books.advance
+                                               (cond-> {:type :books/advance :step (:step nxt)}
+                                                 mid (assoc :meeting mid :agenda aid))))}
           (when needs-res? (field (t :books/resolution) (select "ref" (resolutions-for (:step nxt))) "▾"))
           (btn :primary (t :books/advance {:step (t (keyword "step" (name (:step nxt))))}) nil
                {:type "submit" :disabled? (not (:balanced? sm))})])
@@ -944,7 +955,7 @@
                       nil))]
      (when (and rep (= :unverified (:status rep-status)))
        (list [:div {:class "chips"} (chip :warning (t :officers/rep-unverified {:name (:officer/name rep)}))]
-             (btn :tonal (t :officer/verify) #(act! {:type :officer/verify :id (:officer/id rep)}))))
+             (btn :tonal (t :officer/verify) #(open-approval! :officer.verify {:type :officer/verify :id (:officer/id rep)}))))
      (caption (t :officers/note))
      [:details {:class "disclosure"}
       [:summary {:class "awai-button awai-button--primary"} (t :officers/add)]
@@ -978,8 +989,9 @@
           (icon "chevron")]
          [:form {:class "form" :on-submit #(let [fd (js/FormData. (.-target %))]
                                              (.preventDefault %)
-                                             (act! {:type :member/set-permissions :id (:member/id m)
-                                                    :permissions (map keyword (js->clj (.getAll fd "perm")))}))}
+                                             (open-approval! :member.permissions.set
+                                                             {:type :member/set-permissions :id (:member/id m)
+                                                              :permissions (map keyword (js->clj (.getAll fd "perm")))}))}
           (perm-checks (:member/permissions m))
           (btn :tonal (t :common/save) nil {:type "submit"})]])]
      (caption (t :members/note))
@@ -1016,6 +1028,54 @@
           #(let [s (app/sample)] (reset! state s) (save! s) (go! :confirm-reset false :screen nil :vote nil :tab :home))
           {:destructive? true})]]])
 
+(defn- approval-dialog []
+  (when-let [{:keys [op ev evidence on-success]} (:approval-dialog @ui)]
+    (let [lang (:lang @ui)
+          curr-prev (approval/preview @state op (cond-> ev
+                                                  (= (approval/normalize-op op) :officer.verify)
+                                                  (assoc :evidence (or evidence "")))
+                                      {:lang lang})
+          allowed? (:allowed? curr-prev)
+          effects (:effects curr-prev)]
+      [:div {:class "scrim" :on-keydown #(when (= "Escape" (.-key %)) (go! :approval-dialog nil))}
+       [:div {:class "dialog" :role "alertdialog" :aria-modal "true"
+              :aria-labelledby "approval-title" :aria-describedby "approval-desc"}
+        [:h2 {:id "approval-title"} (t (keyword "approval" (str "title-" (name (approval/normalize-op op)))))]
+        [:div {:id "approval-desc" :class "approval-dialog__content"}
+         [:div {:class "chips"}
+          (chip :warning (t :approval/irreversible))
+          (chip :neutral (t :approval/human-only))]
+         (when (seq effects)
+           [:ul {:class "approval-effects"}
+            (for [eff effects]
+              [:li eff])])
+         (when (= (approval/normalize-op op) :officer.verify)
+           [:div {:class "field-group"}
+            (field (t :approval/evidence-label)
+                   [:textarea {:name "evidence" :rows 3 :required true
+                               :placeholder (t :approval/evidence-placeholder)
+                               :value (or evidence "")
+                               :on-input #(let [v (.. % -target -value)]
+                                            (swap! ui assoc-in [:approval-dialog :evidence] v)
+                                            (render!))}])
+            (caption (t :approval/evidence-note))])
+         (when (and (not allowed?) (:reason curr-prev))
+           (caption (t (keyword "approval" (str "reason-" (name (:reason curr-prev)))))
+                    "problem"))]
+        [:div {:class "dialog__actions"}
+         (btn :text (t :common/cancel) #(go! :approval-dialog nil))
+         (btn :primary (t :approval/confirm)
+              (fn []
+                (let [final-ev (cond-> ev
+                                 (= (approval/normalize-op op) :officer.verify)
+                                 (assoc :evidence (or evidence "")))]
+                  (when (act! final-ev)
+                    (let [cb on-success]
+                      (swap! ui dissoc :approval-dialog)
+                      (when cb (cb))
+                      (render!)))))
+              {:disabled? (not allowed?) :destructive? (= (:decision ev) :reject)})]]])))
+
 (defn- error-banner []
   (when-let [e (:error @ui)]
     (let [k (keyword "error" (name e)) b (keyword "error-body" (name e))
@@ -1034,9 +1094,10 @@
         screen (:screen @ui)
         m (when vote (app/find-by :meeting/id (:meeting vote) (:meetings s)))
         a (when m (app/find-by :agenda/id (:agenda vote) (:meeting/agenda m)))
-        confirm? (:confirm-reset @ui)]
+        confirm? (:confirm-reset @ui)
+        approval? (:approval-dialog @ui)]
     (list
-    [:div {:class "shell" :inert confirm?}
+    [:div {:class "shell" :inert (boolean (or confirm? approval?))}
      (cond
        screen (app-bar {:title (t (get-in screens [screen :title]))
                         :subtitle (cond (= screen :settings) (get-in s [:company :company/name])
@@ -1076,7 +1137,8 @@
                :on-click #(do (.preventDefault %) (go! :tab k :vote nil))}
            [:span {:class "tab__indicator"} (icon ic)]
            [:span {:class "tab__label"} (t (keyword "tab" (name k)))]])])]
-    (when confirm? (reset-dialog)))))
+    (when confirm? (reset-dialog))
+    (when approval? (approval-dialog)))))
 
 (defn render! []
   (let [root (.getElementById js/document "app")

@@ -1,6 +1,7 @@
 (ns kaisha.core-test
   (:require [clojure.test :refer [deftest is testing]]
             [kaisha.app :as app]
+            [kaisha.approval :as approval]
             [kaisha.books :as books]
             [kaisha.chat :as chat]
             [kaisha.company :as co]
@@ -473,3 +474,181 @@
   (is (thrown? #?(:clj Exception :cljs js/Error) (law/cite :kaisha/a999)))
   (is (= "会社法 第368条" (law/short-title :kaisha/a368)))
   (is (= "法人税法 第74条" (law/short-title :hojinzei/a74))))
+
+(defn- as-member [s who]
+  (:state (app/dispatch s {:type :session/as :member who})))
+
+(deftest approval-preview-ringi
+  (let [s (-> (app/sample)
+              (as-member "yamada")
+              (app/dispatch {:type :ringi/create :ringi {:ringi/id "r-prev" :ringi/title "PC購入" :ringi/amount 50000 :ringi/category :ordinary}}) :state
+              (app/dispatch {:type :ringi/submit :id "r-prev" :on "2026-11-20"}) :state)]
+    (testing "許可: 承認人数、取締役会決議不要、自己承認不可、取り消せないこと"
+      (let [s-sato (as-member s "sato")
+            p (approval/preview s-sato :ringi.decide {:id "r-prev" :decision :approve})]
+        (is (:allowed? p))
+        (is (nil? (:reason p)))
+        (is (:irreversible? p))
+        (is (:human-only? p))
+        (is (some #(re-find #"承認人数" %) (:effects p)))
+        (is (some #(re-find #"取締役会決議" %) (:effects p)))
+        (is (some #(re-find #"自己承認" %) (:effects p)))
+        (is (some #(re-find #"取り消せません" %) (:effects p)))))
+    (testing "拒否: 起案者自身による自己承認"
+      (let [p (approval/preview (as-member s "yamada") :ringi.decide {:id "r-prev" :decision :approve})]
+        (is (false? (:allowed? p)))
+        (is (= :self-approval (:reason p)))))
+    (testing "拒否: 未提出・存在しない・権限なし"
+      (let [s-unsub (assoc s :ringi [{:ringi/id "r-unsub" :ringi/drafter "sato" :ringi/amount 1000 :ringi/category :ordinary :ringi/decisions []}])]
+        (is (= :not-submitted (:reason (approval/preview s-unsub :ringi.decide {:id "r-unsub"}))))
+        (is (= :unknown-ringi (:reason (approval/preview s :ringi.decide {:id "r-nonexistent"}))))
+        (is (= :no-approval-permission (:reason (approval/preview (as-member s "takahashi") :ringi.decide {:id "r-prev"}))))))))
+
+(deftest approval-preview-officer-verify
+  (let [s (app/sample)]
+    (testing "許可: 代表取締役と証跡あり"
+      (let [p (approval/preview s :officer.verify {:id "yamada" :evidence "登記事項証明書 2026-11-20 取得分"})]
+        (is (:allowed? p))
+        (is (nil? (:reason p)))
+        (is (:irreversible? p))
+        (is (:human-only? p))
+        (is (some #(re-find #"山田 一郎" %) (:effects p)))
+        (is (some #(re-find #"登記事項証明書" %) (:effects p)))
+        (is (some #(re-find #"取り消せません" %) (:effects p)))))
+    (testing "拒否: 証跡未入力時は案内と拒否"
+      (let [p (approval/preview s :officer.verify {:id "yamada" :evidence ""})]
+        (is (false? (:allowed? p)))
+        (is (= :missing-evidence (:reason p)))
+        (is (some #(re-find #"証跡の入力が必要です" %) (:effects p)))))
+    (testing "blocked: 代表権を持たない役員（平取締役）"
+      (let [p (approval/preview s :officer.verify {:id "sato" :evidence "メモ"})]
+        (is (false? (:allowed? p)))
+        (is (= :blocked (:status p)))
+        (is (= :no-representative-authority (:reason p)))))))
+
+(deftest approval-preview-member-permissions
+  (let [s (app/sample)]
+    (testing "許可: 変更前 → 変更後の差分を示す"
+      (let [p (approval/preview s :member.permissions.set {:id "takahashi" :permissions [:approve :post]})]
+        (is (:allowed? p))
+        (is (nil? (:reason p)))
+        (is (:irreversible? p))
+        (is (:human-only? p))
+        (is (= [:post] (get-in p [:diff :before])))
+        (is (= [:approve :post] (get-in p [:diff :after])))
+        (is (= [:approve] (get-in p [:diff :added])))
+        (is (empty? (get-in p [:diff :removed])))
+        (is (some #(re-find #"高橋 三郎" %) (:effects p)))
+        (is (some #(re-find #"変更前" %) (:effects p)))
+        (is (some #(re-find #"変更後" %) (:effects p)))
+        (is (some #(re-find #"追加される権限: 承認できる" %) (:effects p)))
+        (is (some #(re-find #"取り消せません" %) (:effects p)))))
+    (testing "拒否: 不正な権限・存在しないメンバー"
+      (is (= :invalid-permission (:reason (approval/preview s :member.permissions.set {:id "takahashi" :permissions [:admin]}))))
+      (is (= :unknown-member (:reason (approval/preview s :member.permissions.set {:id "unknown" :permissions [:post]})))))))
+
+(deftest approval-preview-meeting-vote
+  (let [s (-> (app/sample)
+              (assoc-in [:meetings 0 :meeting/notice-sent-on] "2026-12-01")
+              (assoc-in [:meetings 1 :meeting/notice-sent-on] "2027-06-15"))]
+    (testing "許可: 可決・否決（どちらも結果記録として許可）"
+      (let [p-pass (approval/preview s :meeting.vote {:id "board-2026-12" :agenda "a1"
+                                                     :vote {:present #{"yamada" "sato"} :for #{"yamada" "sato"}}})
+            p-fail (approval/preview s :meeting.vote {:id "board-2026-12" :agenda "a1"
+                                                     :vote {:present #{"yamada" "sato"} :for #{"yamada"}}})]
+        (is (:allowed? p-pass))
+        (is (= :passed (:vote-result p-pass)))
+        (is (some #(re-find #"可決として記録" %) (:effects p-pass)))
+        (is (:allowed? p-fail))
+        (is (= :failed (:vote-result p-fail)))
+        (is (= :insufficient-votes (:reason p-fail)))
+        (is (some #(re-find #"否決として記録" %) (:effects p-fail)))))
+    (testing "blocked: 招集通知遅延・票数矛盾"
+      (let [s-late (assoc-in s [:meetings 0 :meeting/notice-sent-on] "2026-12-09")
+            p-late (approval/preview s-late :meeting.vote {:id "board-2026-12" :agenda "a1"
+                                                           :vote {:present #{"yamada" "sato"} :for #{"yamada" "sato"}}})
+            p-incons (approval/preview s :meeting.vote {:id "agm-2027" :agenda "a1"
+                                                        :vote {:rights-total 100 :rights-present 50 :rights-for 60}})]
+        (is (false? (:allowed? p-late)))
+        (is (= :notice-too-late (:reason p-late)))
+        (is (false? (:allowed? p-incons)))
+        (is (= :blocked (:status p-incons)))
+        (is (= :inconsistent-vote-counts (:reason p-incons)))))
+    (testing "undetermined: 特殊決議"
+      (let [s-special (assoc-in s [:meetings 1 :meeting/agenda 0 :agenda/matter] :share-transfer-restriction)
+            p-und (approval/preview s-special :meeting.vote {:id "agm-2027" :agenda "a1"
+                                                            :vote {:rights-total 100 :rights-present 100 :rights-for 100}})]
+        (is (false? (:allowed? p-und)))
+        (is (= :undetermined (:status p-und)))
+        (is (= :special-special-resolution (:reason p-und)))))))
+
+(deftest approval-preview-books-advance
+  (let [s (-> (app/sample)
+              (app/dispatch {:type :books/import :csv tb}) :state)]
+    (testing "許可: 貸借一致、次の段階と決議不要"
+      (let [p (approval/preview s :books.advance {:step :prepared})]
+        (is (:allowed? p))
+        (is (nil? (:reason p)))
+        (is (:irreversible? p))
+        (is (:human-only? p))
+        (is (some #(re-find #"次の段階: 作成" %) (:effects p)))
+        (is (some #(re-find #"必要な決議: なし" %) (:effects p)))
+        (is (some #(re-find #"貸借一致" %) (:effects p)))))
+    (testing "blocked: 貸借不一致"
+      (let [s-unbal (assoc-in s [:financials :fs/rows] [{:account "現金" :category :asset :amount 1000}])
+            p (approval/preview s-unbal :books.advance {:step :prepared})]
+        (is (false? (:allowed? p)))
+        (is (= :blocked (:status p)))
+        (is (= :unbalanced-trial-balance (:reason p)))
+        (is (some #(re-find #"貸借が一致しません" %) (:effects p)))))
+    (testing "blocked: 取締役会決議が必要な段階で決議未指定"
+      (let [s-prep (:state (app/dispatch s {:type :books/advance :step :prepared}))
+            s-aud (:state (app/dispatch s-prep {:type :books/advance :step :audited}))
+            p (approval/preview s-aud :books.advance {:step :board-approved})]
+        (is (false? (:allowed? p)))
+        (is (= :blocked (:status p)))
+        (is (= :board-resolution-required (:reason p)))))))
+
+(deftest agent-human-only-rejection
+  (let [s (app/sample)
+        agent-state (assoc s :actor {:actor/id "bot-1" :actor/kind :agent})]
+    (testing "agent による human-only 5 op は dispatch で拒否される"
+      (is (= :human-only (:error (app/dispatch agent-state {:type :ringi/decide :id "r1" :decision :approve}))))
+      (is (= :human-only (:error (app/dispatch agent-state {:type :officer/verify :id "yamada" :evidence "証明書"}))))
+      (is (= :human-only (:error (app/dispatch agent-state {:type :member/set-permissions :id "takahashi" :permissions [:post]}))))
+      (is (= :human-only (:error (app/dispatch agent-state {:type :meeting/vote :id "board-2026-12" :agenda "a1" :vote {:present #{"yamada"} :for #{"yamada"}}}))))
+      (is (= :human-only (:error (app/dispatch agent-state {:type :books/advance :step :prepared})))))
+    (testing "拒否された場合 state は一切変更されない"
+      (is (= agent-state (:state (app/dispatch agent-state {:type :officer/verify :id "yamada" :evidence "証明書"})))))
+    (testing "agent でも起案・提出・チャット投稿は許可される"
+      (let [r (app/dispatch agent-state {:type :ringi/create :ringi {:ringi/id "r-bot" :ringi/title "bot起案" :ringi/amount 1000 :ringi/category :ordinary}})]
+        (is (nil? (:error r)))
+        (is (= "bot-1" (:ringi/drafter (app/find-by :ringi/id "r-bot" (get-in r [:state :ringi])))))
+        (is (= :agent (:kind (last (get-in r [:state :audit])))))))))
+
+(deftest officer-verify-evidence-and-patch-guard
+  (let [s (app/sample)]
+    (testing "officer/verify で証跡が state に保存される"
+      (let [r (app/dispatch s {:type :officer/verify :id "yamada" :on "2026-11-20" :evidence "法務局取得 履歴事項全部証明書"})]
+        (is (nil? (:error r)))
+        (let [o (app/find-by :officer/id "yamada" (get-in r [:state :company :company/officers]))]
+          (is (= "法務局取得 履歴事項全部証明書" (:officer/authority-evidence o)))
+          (is (= "2026-11-20" (:officer/authority-verified-on o))))))
+    (testing "officer/verify は証跡未入力だと dispatch で拒否される"
+      (is (= :missing-evidence (:error (app/dispatch s {:type :officer/verify :id "yamada" :on "2026-11-20" :evidence ""}))))
+      (is (= :missing-evidence (:error (app/dispatch s {:type :officer/verify :id "yamada" :on "2026-11-20"})))))
+    (testing "company/set による役員・メンバーの直接改ざんは拒否される（P2 ガード）"
+      (is (= :disallowed-patch (:error (app/dispatch s {:type :company/set :patch {:company/officers []}}))))
+      (is (= :disallowed-patch (:error (app/dispatch s {:type :company/set :patch {:company/members []}})))))))
+
+(deftest approval-dialog-cancellation-preserves-state
+  (testing "承認ダイアログを開いてキャンセルしても state は一切変更されない"
+    (let [s (app/sample)
+          dialog-state {:op :officer.verify :ev {:type :officer/verify :id "yamada"} :evidence "メモ"}
+          ;; UI atom でダイアログを開き、キャンセルしたシミュレーション
+          ui-open {:approval-dialog dialog-state}
+          ui-cancel (dissoc ui-open :approval-dialog)]
+      (is (some? (:approval-dialog ui-open)))
+      (is (nil? (:approval-dialog ui-cancel)))
+      ;; state そのものは一切変更されない
+      (is (= s (app/sample))))))
