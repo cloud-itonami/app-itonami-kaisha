@@ -49,7 +49,7 @@ const descriptor = {
   target: 'browser',
   profile: 'trusted-page-v1',
   entry: 'index.html',
-  'local-state': {adapter: 'localstorage', schema: 'itonami.kaisha.state.v1', version: 1},
+  'local-state': {adapter: 'localstorage', schema: 'itonami.kaisha.state.v2', version: 2},
   workers: [],
   operations: []
 };
@@ -59,7 +59,7 @@ const names = ['index.html', 'style.css', 'main.js', 'awai-ui.css', 'awai-ui-LIC
 const files = {};
 for (const n of names) files[n] = sha(await readFile(resolve(out, n)));
 const core = {};
-for (const n of ['app', 'books', 'chat', 'company', 'date', 'deadlines', 'i18n', 'law', 'meeting', 'ringi'])
+for (const n of ['app', 'books', 'chat', 'company', 'date', 'deadlines', 'i18n', 'law', 'meeting', 'ringi', 'screen'])
   core[`src/kaisha/${n}.cljc`] = sha(await readFile(resolve(root, `src/kaisha/${n}.cljc`)));
 await writeFile(resolve(out, 'release.json'), JSON.stringify({
   schema: 'awai.app.artifact.v1',
