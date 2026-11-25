@@ -11,7 +11,8 @@
             [kaisha.identity :as idn]
             [kaisha.meeting :as mt]
             [kaisha.procedures :as proc]
-            [kaisha.ringi :as ringi]))
+            [kaisha.ringi :as ringi]
+            [kaisha.screen :as screen]))
 
 (def c (:company (app/sample)))
 
@@ -198,6 +199,129 @@
     (is (some #(and (= :tax-return (:kind %)) (= "2027-05-31" (:date %))) items))
     (is (some #(and (= :notice-latest (:kind %)) (= "2026-12-02" (:date %))) items) "取締役会の 1 週間前")
     (is (= (sort (map :date items)) (map :date items)))))
+
+(deftest state-v2
+  (let [s (app/sample)]
+    (testing "sample は schema v2 で actor を持つ"
+      (is (= "itonami.kaisha.state.v2" (:schema s)))
+      (is (= {:actor/id "ito" :actor/kind :human} (:actor s)))
+      (is (nil? (:me s)))
+      (is (app/valid-state? s))
+      (is (not (contains? s :ops)))
+      (is (not-any? #(contains? % :needs-board-resolution) (:ringi s))))
+    (testing "actor の検査"
+      (is (not (app/valid-state? (dissoc s :actor))))
+      (is (not (app/valid-state? (assoc s :actor {:actor/id "ito"}))))
+      (is (not (app/valid-state? (assoc s :actor {:actor/id "ito" :actor/kind :robot}))))
+      (is (not (app/valid-state? (assoc s :actor {:actor/id "" :actor/kind :human}))))
+      (is (not (app/valid-state? (assoc s :schema app/v1-schema)))))
+    (testing "設定の「操作する人」は human"
+      (let [next (:state (app/dispatch s {:type :session/as :member "yamada"}))]
+        (is (= {:actor/id "yamada" :actor/kind :human} (:actor next)))
+        (is (app/valid-state? next))))
+    (testing "監査には actor の id と kind が入る"
+      (let [ev {:type :member/add :at "2026-11-25T10:00"
+                :member {:member/id "kimura" :member/name "木村 五郎" :member/permissions [:post]}}
+            next (:state (app/dispatch s ev))
+            entry (last (:audit next))]
+        (is (= "ito" (:actor entry)))
+        (is (= :human (:kind entry)))
+        (is (= :member/add (:type entry)))
+        (is (app/valid-state? next))))
+    (testing "agent の操作も kind で区別して監査に残る"
+      (let [agent (assoc s :actor {:actor/id "ito" :actor/kind :agent})
+            next (:state (app/dispatch agent {:type :member/add :at "2026-11-25T10:01"
+                                              :member {:member/id "sasaki" :member/name "佐々木 六郎"
+                                                       :member/permissions [:post]}}))]
+        (is (= :agent (:kind (last (:audit next)))))
+        (is (app/valid-state? next))))))
+
+(deftest state-v1-migration
+  (let [v1 (-> (app/sample)
+               (assoc :schema app/v1-schema :me "yamada")
+               (dissoc :actor)
+               (assoc :audit [{:at "2026-11-18" :actor "yamada" :type :company/set :target nil}]))
+        s (app/parse-state (pr-str v1))]
+    (testing "v1 の文字列を読み込み時に v2 へ移す"
+      (is (= app/schema (:schema s)))
+      (is (= {:actor/id "yamada" :actor/kind :human} (:actor s)))
+      (is (nil? (:me s)))
+      (is (= [{:at "2026-11-18" :actor "yamada" :kind :human :type :company/set :target nil}]
+             (:audit s)))
+      (is (app/valid-state? s))))
+  (testing "v2 の文字列はそのまま読む"
+    (is (= (app/sample) (app/parse-state (pr-str (app/sample))))))
+  (testing "移行できない値は nil（画面は sample に戻す）"
+    (is (nil? (app/parse-state "{:schema \"itonami.kaisha.state.v1\" :me 42}")))
+    (is (nil? (app/parse-state "{:schema \"itonami.kaisha.state.v1\"}")))
+    (is (nil? (app/parse-state "not edn")))
+    (is (nil? (app/parse-state nil)))))
+
+(deftest screen-status
+  (let [s (app/sample)
+        ringi-ready {:ringi/id "r1" :ringi/title "備品の購入" :ringi/amount 100000
+                     :ringi/category :board-general :ringi/drafter "ito"
+                     :ringi/submitted-on "2026-11-18" :ringi/decisions []}
+        ringi-board {:ringi/id "r2" :ringi/title "借入" :ringi/amount 50000000
+                     :ringi/category :large-borrowing :ringi/drafter "ito"
+                     :ringi/submitted-on "2026-11-18"
+                     :ringi/decisions [{:by "sato" :decision :approve}
+                                       {:by "suzuki" :decision :approve}
+                                       {:by "yamada" :decision :approve}]}
+        fs-ready {:fs/rows (:rows (books/parse-trial-balance tb)) :fs/history []}
+        verified (assoc-in s [:company :company/officers 0 :officer/authority-verified-on] "2026-11-18")
+        proc-rec {:procedure/id "p1" :procedure/kind :head-office-move :moved-on "2026-11-20"}]
+    (testing "ready: 7 画面"
+      (is (= {:status :ready} (screen/status s :kaisha.schedule)))
+      (is (= {:status :ready} (screen/status s :kaisha.meeting)))
+      (is (= {:status :ready} (screen/status (assoc s :ringi [ringi-ready]) :kaisha.ringi)))
+      (is (= {:status :ready} (screen/status (assoc s :financials fs-ready) :kaisha.books)))
+      (is (= {:status :ready} (screen/status s :kaisha.chat)))
+      (is (= {:status :ready} (screen/status (assoc verified :procedures [proc-rec]) :kaisha.procedures)))
+      (is (= {:status :ready} (screen/status s :kaisha.settings))))
+    (testing "empty"
+      (is (= {:status :empty} (screen/status s :kaisha.ringi)))
+      (is (= {:status :empty :reason :no-trial-balance} (screen/status s :kaisha.books)))
+      (is (= {:status :empty} (screen/status s :kaisha.procedures)))
+      (is (= {:status :empty} (screen/status (assoc s :space {:channels {}}) :kaisha.chat)))
+      (is (= {:status :empty}
+             (screen/status (-> s
+                                (assoc :meetings [] :registrations [])
+                                (assoc-in [:company :company/officers] [])
+                                (assoc-in [:company :company/fy-end-month] nil))
+                            :kaisha.schedule))))
+    (testing "error"
+      (is (= {:status :error :reason :invalid-state} (screen/status {} :kaisha.ringi)))
+      (is (= {:status :error :reason :invalid-state}
+             (screen/status (assoc s :actor nil) :kaisha.ringi)))
+      (is (= {:status :error :reason :unknown-screen} (screen/status s :kaisha.unknown))))
+    (testing "undetermined"
+      (is (= {:status :undetermined :reason :missing-meeting-date}
+             (screen/status (assoc-in s [:meetings 0 :meeting/date] "2026-02-30") :kaisha.meeting)))
+      (is (= {:status :undetermined :reason :missing-election-date}
+             (screen/status (assoc-in s [:company :company/officers 0]
+                                      {:officer/id "yamada" :officer/roles [:representative-director]})
+                            :kaisha.schedule)))
+      (is (= {:status :undetermined :reason :unsupported-entity-form}
+             (screen/status (assoc-in s [:company :company/form] :gk) :kaisha.settings)))
+      (is (= {:status :undetermined :reason :unsupported-entity-form}
+             (screen/status (-> s
+                                (assoc :procedures [proc-rec])
+                                (assoc-in [:company :company/form] :gk))
+                            :kaisha.procedures))))
+    (testing "blocked"
+      (is (= {:status :blocked :reason :notice-too-late}
+             (screen/status (assoc-in s [:meetings 0 :meeting/notice-sent-on] "2026-12-09")
+                            :kaisha.meeting)))
+      (is (= {:status :blocked :reason :board-resolution-required}
+             (screen/status (assoc s :ringi [ringi-board]) :kaisha.ringi)))
+      (is (= {:status :blocked :reason :unbalanced-trial-balance}
+             (screen/status (assoc s :financials
+                                   {:fs/rows [{:account "現金" :category :asset :amount 100}]
+                                    :fs/history []})
+                            :kaisha.books)))
+      (is (= {:status :blocked :reason :representative-unconfirmed}
+             (screen/status (assoc s :procedures [proc-rec]) :kaisha.procedures))))))
 
 (deftest app-events
   (let [s (app/sample)

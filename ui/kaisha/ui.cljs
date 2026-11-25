@@ -2,8 +2,7 @@
   "画面。構成は Figma の提案（umqCqP5KSjLWh9fhCI1HaN、ページ 319:2、AWAI-3445）に合わせる。
   状態は kaisha.app の純粋な関数で更新し、端末の localStorage にだけ保存する。
   外部への通信はしない（CSP connect-src は ipc のみ）。"
-  (:require [cljs.reader :as reader]
-            [clojure.string :as str]
+  (:require [clojure.string :as str]
             [kaisha.app :as app]
             [kaisha.books :as books]
             [kaisha.chat :as chat]
@@ -17,25 +16,32 @@
             [kaisha.procedures :as proc]
             [kaisha.ringi :as ringi]))
 
-(def storage-key "itonami.kaisha.state.v1")
+(def storage-key "itonami.kaisha.state.v2")
+(def legacy-storage-key "itonami.kaisha.state.v1")
 
 (defonce ui (atom {:tab :home :lang :ja :error nil :storage? true}))
 (defonce state (atom nil))
 
 ;; ---------------------------------------------------------------- 保存
 
+(defn- save! [s]
+  (try (.setItem js/localStorage storage-key (pr-str s)) true
+       (catch :default _ (swap! ui assoc :storage? false) false)))
+
 (defn- load-state []
   (try
-    (let [raw (.getItem js/localStorage storage-key)
-          s (when raw (reader/read-string raw))]
-      (if (app/valid-state? s) s (app/sample)))
+    (let [v2 (app/parse-state (.getItem js/localStorage storage-key))
+          migrated (when-not v2 (app/parse-state (.getItem js/localStorage legacy-storage-key)))]
+      (cond
+        v2 v2
+        migrated (do (when (save! migrated)
+                       (try (.removeItem js/localStorage legacy-storage-key)
+                            (catch :default _)))
+                     migrated)
+        :else (app/sample)))
     (catch :default _
       (swap! ui assoc :storage? false)
       (app/sample))))
-
-(defn- save! [s]
-  (try (.setItem js/localStorage storage-key (pr-str s))
-       (catch :default _ (swap! ui assoc :storage? false))))
 
 ;; ---------------------------------------------------------------- 小道具
 
@@ -148,6 +154,8 @@
 (defn- h2 [s] [:h2 s])
 (defn- caption [s & [cls]] [:p {:class (str "caption " (or cls "muted"))} s])
 (defn- source-line [id] (when id (caption (t :common/source-inline {:law (law/short-title id)}))))
+
+(defn- actor-id [s] (:actor/id (:actor s)))
 
 (defn- member-name [id]
   (or (:member/name (app/find-by :member/id id (get-in @state [:company :company/members]))) id))
@@ -401,7 +409,7 @@
         st (ringi/status c r)
         {:keys [approvers board-resolution? source]} (ringi/route c r)
         approved-by (map :by (filter #(= :approve (:decision %)) (:ringi/decisions r)))
-        me (:me s)
+        me (actor-id s)
         rep (some #(when (some #{:representative-director :representative-member} (:officer/roles %)) %) (:company/officers c))]
     (card
      [:div {:class "card__head"} [:strong {:class "card__title"} (:ringi/title r)] (status-chip st)]
@@ -537,7 +545,7 @@
 
 (defn- channel-label [ch]
   (if (= :dm (:channel/kind ch))
-    (t :chat/dm {:name (member-name (first (disj (:channel/members ch) (:me @state))))})
+    (t :chat/dm {:name (member-name (first (disj (:channel/members ch) (actor-id @state))))})
     (str "# " (:channel/name ch))))
 
 (defn- hhmm [at] (if (and at (>= (count at) 16)) (subs at 11 16) at))
@@ -558,7 +566,7 @@
           (btn :tonal (t :chat/send) nil {:type "submit"})]])))])
 
 (defn- chat-view []
-  (let [s @state me (:me s) space (:space s)
+  (let [s @state me (actor-id s) space (:space s)
         chs (chat/visible-channels space me)
         current (or (some #(when (= (:channel (deref ui)) (:channel/id %)) %) chs) (first chs))
         ch-id (:channel/id current)]
@@ -831,7 +839,7 @@
               (field (t :app/acting-as)
                      [:select {:on-change #(act! {:type :session/as :member (.. % -target -value)})}
                       (for [m (:company/members c)]
-                        [:option {:value (:member/id m) :selected (= (:me s) (:member/id m))} (:member/name m)])] "▾")
+                        [:option {:value (:member/id m) :selected (= (actor-id s) (:member/id m))} (:member/name m)])] "▾")
               (caption (t :settings/acting-note)))
      (section (t :settings/display)
               [:fieldset {:class "choice"}

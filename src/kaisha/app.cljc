@@ -2,8 +2,10 @@
   "アプリの状態と操作。すべて純粋な関数で、画面（kaisha.ui）と test が同じ関数を使う。
 
   状態は端末の中だけにある。外部への送信・提出・署名はしない（descriptor の operations は空）。
-  受け付けた操作は :audit に残す（誰が・いつ・何を）。"
+  操作する人は :actor {:actor/id ... :actor/kind :human|:agent} で持つ。受け付けた操作は
+  :audit に残す（誰が・いつ・何を・人か agent か）。"
   (:require [clojure.string :as str]
+            #?(:clj [clojure.edn :as edn] :cljs [cljs.reader :as edn])
             [kaisha.books :as books]
             [kaisha.chat :as chat]
             [kaisha.company :as co]
@@ -12,7 +14,9 @@
             [kaisha.procedures :as proc]
             [kaisha.ringi :as ringi]))
 
-(def schema "itonami.kaisha.state.v1")
+(def schema "itonami.kaisha.state.v2")
+(def v1-schema "itonami.kaisha.state.v1")
+(def actor-kinds #{:human :agent})
 
 (def member-permissions
   "社内の権限。代表権（会社法 349条）とは別で、代表権の証明にならない。"
@@ -28,7 +32,7 @@
                  {:member/id "ito" :member/name "伊藤 由紀" :member/permissions [:post]}]]
     {:schema schema
      :fixture true
-     :me "ito"
+     :actor {:actor/id "ito" :actor/kind :human}
      :company {:company/id "fixture-kk"
                :company/name "架空商事株式会社"
                :company/corporate-number "7123456789012"
@@ -90,11 +94,11 @@
 
 (defn- step [state {:keys [type on] :as ev}]
   (let [c (:company state)
-        me (:me state)]
+        me (:actor/id (:actor state))]
     (case type
       :session/as
       (if (find-by :member/id (:member ev) (:company/members c))
-        (ok (assoc state :me (:member ev)))
+        (ok (assoc state :actor {:actor/id (:member ev) :actor/kind :human}))
         (err state :unknown-member))
 
       :company/set
@@ -275,12 +279,48 @@
     (if (or (:error res) (unaudited (:type ev)))
       res
       (update-in res [:state :audit] (fnil conj [])
-                 {:at (or (:at ev) (:on ev)) :actor (:me state) :type (:type ev)
+                 {:at (or (:at ev) (:on ev)) :actor (:actor/id (:actor state))
+                  :kind (:actor/kind (:actor state)) :type (:type ev)
                   :target (or (:id ev) (:channel ev) (get-in ev [:ringi :ringi/id])
                               (get-in ev [:meeting :meeting/id]) (get-in ev [:officer :officer/id])
                               (get-in ev [:member :member/id]))}))))
 
+(defn- valid-actor? [a]
+  (and (map? a) (string? (:actor/id a)) (not (str/blank? (:actor/id a)))
+       (contains? actor-kinds (:actor/kind a))))
+
+(defn- valid-audit? [audit]
+  (and (vector? audit)
+       (every? #(and (map? %) (string? (:actor %)) (contains? actor-kinds (:kind %))) audit)))
+
 (defn valid-state? [s]
-  (and (map? s) (= schema (:schema s)) (map? (:company s)) (map? (:space s))
+  (and (map? s) (= schema (:schema s)) (valid-actor? (:actor s))
+       (map? (:company s)) (map? (:space s))
        (or (nil? (:procedures s)) (vector? (:procedures s)))
-       (vector? (:meetings s)) (vector? (:ringi s))))
+       (vector? (:meetings s)) (vector? (:ringi s))
+       (valid-audit? (:audit s))))
+
+(defn migrate-state
+  "v1 の状態を v2 に移す。:me を :actor（:human）にし、監査の各項目に :kind :human を足す。
+  移せない値は nil（呼び出し側が sample に戻す）。"
+  [s]
+  (when (and (map? s) (= v1-schema (:schema s)) (string? (:me s)) (not (str/blank? (:me s))))
+    (let [next (-> s
+                   (dissoc :me)
+                   (assoc :schema schema
+                          :actor {:actor/id (:me s) :actor/kind :human})
+                   (update :audit
+                           #(mapv (fn [h]
+                                    (if (and (map? h) (:actor h))
+                                      (assoc h :kind (or (:kind h) :human))
+                                      h))
+                                  (or % []))))]
+      (when (valid-state? next) next))))
+
+(defn parse-state
+  "保存した文字列を schema v2 の状態にする。v1 は移行する。壊れた値・移行できない v1 は nil。"
+  [raw]
+  (when (and (string? raw) (not (str/blank? raw)))
+    (let [s (try (edn/read-string raw)
+                 (catch #?(:clj Exception :cljs :default) _ nil))]
+      (if (valid-state? s) s (migrate-state s)))))
