@@ -70,10 +70,10 @@
 
 (defn preview-board
   "取締役会決議の試算。必要数・可否・blocked/undetermined の理由。"
-  [c present for interested]
+  [c present for interested & [{:keys [submitted?]}]]
   (let [eligible-present (count (remove (set interested) (set present)))
         th (mt/board-thresholds c interested eligible-present)
-        r (when (seq present)
+        r (when (or submitted? (seq present))
             (mt/resolve-board c {:present present :for for :interested interested}))]
     {:thresholds th
      :result r
@@ -297,7 +297,8 @@
       (let [notice (mt/notice-check c m)
             board? (= :board (:meeting/body m))
             prev (if board?
-                   (preview-board c (:present vote) (:for vote) (:interested vote))
+                   (preview-board c (:present vote) (:for vote) (:interested vote)
+                                  {:submitted? (some? (:present vote))})
                    (preview-shareholders c (:agenda/matter a) (:rights-total vote) (:rights-present vote) (:rights-for vote)))
             r (:result prev)
             notice-ok? (= :ok (:status notice))

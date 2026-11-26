@@ -568,6 +568,19 @@
         (is (= :failed (:vote-result p-fail)))
         (is (= :insufficient-votes (:reason p-fail)))
         (is (some #(re-find #"否決として記録" %) (:effects p-fail)))))
+    (testing "許可: 出席ゼロの投票は定足数不足として記録"
+      (let [ev {:type :meeting/vote :id "board-2026-12" :agenda "a1"
+                :vote {:present #{} :for #{} :interested #{}}}
+            p (approval/preview s :meeting.vote ev)
+            result (get-in (app/dispatch s ev) [:state :meetings 0 :meeting/agenda 0 :agenda/result])]
+        (is (:allowed? p))
+        (is (= :failed (:status p) (:status result)))
+        (is (= :quorum-not-met (:reason p) (:reason result)))))
+    (testing "未入力: 初期フォームと出席未指定の投票は未判定"
+      (let [args {:id "board-2026-12" :agenda "a1" :vote {:for #{} :interested #{}}}]
+        (is (nil? (:result (approval/preview-board (:company s) #{} #{} #{}))))
+        (is (false? (:allowed? (approval/preview s :meeting.vote args))))
+        (is (false? (:allowed? (approval/preview s :meeting.vote (assoc-in args [:vote :present] nil)))))))
     (testing "blocked: 招集通知遅延・票数矛盾"
       (let [s-late (assoc-in s [:meetings 0 :meeting/notice-sent-on] "2026-12-09")
             p-late (approval/preview s-late :meeting.vote {:id "board-2026-12" :agenda "a1"
