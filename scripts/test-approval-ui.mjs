@@ -191,12 +191,17 @@ class MockDocument extends MockNode {
 
 // Setup environment
 const storage = new Map();
+let failNextSet = false;
 const mockLocalStorage = {
   getItem: (k) => {
     const val = storage.get(k) || null;
     return val;
   },
   setItem: (k, v) => {
+    if (failNextSet) {
+      console.log('setItem simulated FAILURE for:', k);
+      throw new Error('QuotaExceededError: simulated localStorage write failure');
+    }
     console.log('setItem called:', k);
     storage.set(k, String(v));
   },
@@ -391,10 +396,13 @@ async function run() {
   if (!effectsText.includes('失われる件数') || !effectsText.includes('会社 1件')) {
     throw new Error(`Effects does not include lost items dry-run counts: ${effectsText}`);
   }
+  if (!effectsText.includes('登記') || !effectsText.includes('手続き') || !effectsText.includes('旧監査')) {
+    throw new Error(`Effects does not include registration, procedure, or old audit counts: ${effectsText}`);
+  }
   if (!effectsText.includes('取り消せません')) {
     throw new Error(`Effects does not include irreversible warning: ${effectsText}`);
   }
-  console.log('   Dry-run counts and irreversible warnings verified in effects.');
+  console.log('   Dry-run counts (including registrations, procedures, and old audit) and warnings verified in effects.');
 
   const resetConfirmBtn = resetDialog.querySelector('[data-approval-confirm]');
   if (!resetConfirmBtn) throw new Error('Confirm button not found in reset dialog');
@@ -425,14 +433,50 @@ async function run() {
   const restoredResetAfterCancel = assertResetCancelled(restoredResetAfterEscape, 'Cancel');
   console.log('   Escape and Cancel properly preserved storage and restored focus to reset-demo-btn.');
 
-  console.log('10. Testing Confirm flow for reset...');
+  console.log('10. Testing save! failure regression on reset approval card...');
+  // Open dialog again to test failure handling
   restoredResetAfterCancel.dispatchEvent({ type: 'click' });
+  const failDialog = appRoot.querySelector('.dialog');
+  if (!failDialog) throw new Error('Reset dialog not open for save failure test');
+
+  const storageBeforeFail = storage.get('itonami.kaisha.state.v2');
+
+  // Set simulated save failure
+  failNextSet = true;
+  const failConfirmBtn = failDialog.querySelector('[data-approval-confirm]');
+  failConfirmBtn.dispatchEvent({ type: 'click' });
+  failNextSet = false;
+
+  // VERIFY: Dialog MUST remain open!
+  const stillOpenDialog = appRoot.querySelector('.dialog');
+  if (!stillOpenDialog) {
+    throw new Error('Dialog closed despite save! failure!');
+  }
+
+  // VERIFY: Error reason must be displayed inside dialog
+  const failReasonEl = stillOpenDialog.querySelector('[data-approval-reason]');
+  if (!failReasonEl || !failReasonEl.textContent.includes('保存に失敗したため')) {
+    throw new Error(`Expected save failure message in dialog, got: ${failReasonEl?.textContent}`);
+  }
+
+  // VERIFY: Storage remains unchanged
+  if (storage.get('itonami.kaisha.state.v2') !== storageBeforeFail) {
+    throw new Error('Storage was modified despite save! failure!');
+  }
+
+  // Close the failure dialog with Cancel
+  stillOpenDialog.querySelectorAll('button').find(b => b.textContent === 'やめる').dispatchEvent({ type: 'click' });
+  const restoredAfterFailCancel = global.document.getElementById('reset-demo-btn');
+  console.log('   save! failure properly kept dialog open, displayed error, and preserved storage.');
+
+  console.log('11. Testing successful Confirm flow for reset...');
+  restoredAfterFailCancel.dispatchEvent({ type: 'click' });
   const dialogToConfirm = appRoot.querySelector('.dialog');
   const finalConfirmBtn = dialogToConfirm.querySelector('[data-approval-confirm]');
   finalConfirmBtn.dispatchEvent({ type: 'click' });
 
   if (appRoot.querySelector('.dialog')) {
-    throw new Error('Dialog should be closed after confirmation');
+    throw new Error('Dialog should be closed after successful confirmation');
   }
 
   // Storage MUST now be reset to sample data, with officer verify wiped, and exactly 1 audit entry for :data/reset-demo
@@ -453,7 +497,7 @@ async function run() {
   }
   console.log('   Reset confirmation verified: state restored to fixture, audit has exactly 1 entry for :data/reset-demo.');
 
-  console.log('\nALL UI TESTS PASSED SUCCESSFULLY! (Focus retention, IME safety, Escape, Cancel, Confirm, and Reset verified)');
+  console.log('\nALL UI TESTS PASSED SUCCESSFULLY! (Focus retention, IME safety, Escape, Cancel, Save failure, Confirm, and Reset verified)');
 }
 
 run().catch(err => {

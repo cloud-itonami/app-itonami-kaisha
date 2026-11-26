@@ -519,13 +519,13 @@
 (defn- preview-data-reset-demo [state args opts]
   (let [lang (or (:lang opts) (:lang args) :ja)
         counts (reset-preview state)
-        {:keys [company officers members meetings ringi financials chat]} counts
+        {:keys [company officers members meetings ringi financials chat registrations procedures audit]} counts
         fixture-text (if (= :ja lang)
                        "戻す先: 架空商事株式会社（初期データ）"
                        "Restore target: Kakū Shōji K.K. (demo data)")
         counts-text (if (= :ja lang)
-                      (str "失われる件数: 会社 " company "件、役員 " officers "件、メンバー " members "件、会議 " meetings "件、稟議 " ringi "件、会計 " financials "件、会話 " chat "件")
-                      (str "Lost items: " company " company, " officers " officers, " members " members, " meetings " meetings, " ringi " approvals, " financials " accounts, " chat " messages"))
+                      (str "失われる件数: 会社 " company "件、役員 " officers "件、メンバー " members "件、会議 " meetings "件、稟議 " ringi "件、会計 " financials "件、会話 " chat "件、登記 " registrations "件、手続き " procedures "件、旧監査 " audit "件")
+                      (str "Lost items: " company " company, " officers " officers, " members " members, " meetings " meetings, " ringi " approvals, " financials " accounts, " chat " messages, " registrations " registrations, " procedures " procedures, " audit " old audit logs"))
         irreversible-text (if (= :ja lang)
                             "この操作は取り消せません。"
                             "This operation cannot be undone.")]

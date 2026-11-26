@@ -760,15 +760,15 @@
       (is (nil? (:reason p-ja)))
       (is (:irreversible? p-ja))
       (is (:human-only? p-ja))
-      ;; 日英 i18n の effects 検証
+      ;; 日英 i18n の effects 検証（全 10 項目）
       (is (some #(re-find #"架空商事株式会社" %) (:effects p-ja)))
-      (is (some #(re-find #"会社 1件、役員 4件、メンバー 5件、会議 2件、稟議 0件、会計 0件、会話 0件" %) (:effects p-ja)))
+      (is (some #(re-find #"会社 1件、役員 4件、メンバー 5件、会議 2件、稟議 0件、会計 0件、会話 0件、登記 0件、手続き 0件、旧監査 0件" %) (:effects p-ja)))
       (is (some #(re-find #"取り消せません" %) (:effects p-ja)))
       (is (some #(re-find #"Kakū Shōji" %) (:effects p-en)))
-      (is (some #(re-find #"1 company, 4 officers, 5 members, 2 meetings, 0 approvals, 0 accounts, 0 messages" %) (:effects p-en)))
+      (is (some #(re-find #"1 company, 4 officers, 5 members, 2 meetings, 0 approvals, 0 accounts, 0 messages, 0 registrations, 0 procedures, 0 old audit logs" %) (:effects p-en)))
       (is (some #(re-find #"cannot be undone" %) (:effects p-en)))))
 
-  (testing "追加後の state に対する reset-preview 件数と effects の連動"
+  (testing "追加後の state（全項目が1件以上）に対する reset-preview 件数と日英 effects の検証"
     (let [s0 (app/sample)
           s1 (:state (app/dispatch s0 {:type :member/add :at "2026-11-26T10:00"
                                        :member {:member/id "m-new" :member/name "新メンバー" :member/permissions [:post]}}))
@@ -784,7 +784,19 @@
           s8 (:state (app/dispatch s7 {:type :procedure/head-office-move :at "2026-11-26T10:35"
                                        :id "proc-1" :to {:country :jp :subdivision :jp.fixture/city-b} :moved-on "2026-12-01"}))
           counts (app/reset-preview s8)
-          p (approval/preview s8 :data/reset-demo {})]
+          p-ja (approval/preview s8 :data/reset-demo {})
+          p-en (approval/preview s8 :data/reset-demo {} {:lang :en})]
+      ;; 各項目が 1 件以上存在することの確認
+      (is (pos? (:company counts)))
+      (is (pos? (:officers counts)))
+      (is (pos? (:members counts)))
+      (is (pos? (:meetings counts)))
+      (is (pos? (:ringi counts)))
+      (is (pos? (:financials counts)))
+      (is (pos? (:chat counts)))
+      (is (pos? (:registrations counts)))
+      (is (pos? (:procedures counts)))
+      (is (pos? (:audit counts)))
       (is (= 1 (:company counts)))
       (is (= 5 (:officers counts)) "4 -> 5")
       (is (= 6 (:members counts)) "5 -> 6")
@@ -794,9 +806,11 @@
       (is (= 1 (:chat counts)) "0 -> 1")
       (is (= 1 (:registrations counts)) "officer/add による就任登記が自動追加")
       (is (= 1 (:procedures counts)) "0 -> 1")
-      (is (< 1 (:audit counts)) "複数の dispatch による監査記録が蓄積")
-      (is (= counts (:counts p)))
-      (is (some #(re-find #"役員 5件、メンバー 6件、会議 3件、稟議 1件、会計 1件、会話 1件" %) (:effects p))))))
+      (is (= 8 (:audit counts)) "各操作（8回の dispatch）による監査記録が蓄積")
+      (is (= counts (:counts p-ja)))
+      ;; 日英両方の承認カード effects に全項目の消去件数が表示されること
+      (is (some #(re-find #"会社 1件、役員 5件、メンバー 6件、会議 3件、稟議 1件、会計 1件、会話 1件、登記 1件、手続き 1件、旧監査 8件" %) (:effects p-ja)))
+      (is (some #(re-find #"1 company, 5 officers, 6 members, 3 meetings, 1 approvals, 1 accounts, 1 messages, 1 registrations, 1 procedures, 8 old audit logs" %) (:effects p-en))))))
 
 (deftest reset-demo-dispatch-and-audit
   (testing "リセット実行で state は sample に戻り、audit は 1 行のみ残り、リセット前 actor と一致する"

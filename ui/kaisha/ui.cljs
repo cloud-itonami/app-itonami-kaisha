@@ -92,15 +92,30 @@
 (declare render! procedures-section settings-row section)
 
 (defn- act!
-  "操作を適用する。拒まれたら理由を画面に出し、状態は変えない。成功なら true。"
+  "操作を適用する。拒まれたら理由を画面に出し、状態は変えない。
+  端末への保存（save!）に失敗した場合もメモリ上の旧状態を維持し、失敗を表示する。成功なら true。"
   [ev]
   (let [ev (merge {:on (today) :at (now)} ev)
         res (app/dispatch @state ev)]
-    (if (:error res)
-      (swap! ui assoc :error (:error res) :problems (:problems res))
-      (do (reset! state (:state res)) (save! (:state res)) (swap! ui assoc :error nil :problems nil)))
-    (render!)
-    (not (:error res))))
+    (cond
+      (:error res)
+      (do
+        (swap! ui assoc :error (:error res) :problems (:problems res))
+        (render!)
+        false)
+
+      (not (save! (:state res)))
+      (do
+        (swap! ui assoc :error :storage-save-failed :problems nil)
+        (render!)
+        false)
+
+      :else
+      (do
+        (reset! state (:state res))
+        (swap! ui assoc :error nil :problems nil)
+        (render!)
+        true))))
 
 (defn- go! [& kvs]
   (apply swap! ui assoc :error nil :problems nil kvs)
@@ -1088,7 +1103,14 @@
                                :on-change #(update-approval-evidence! (.-currentTarget %) (.. % -target -value))}])
             (caption (t :approval/evidence-note))])
          [:div {:data-approval-reason "true"}
-          (when (and (not allowed?) (:reason curr-prev))
+          (cond
+            (:error @ui)
+            (caption (if (has-msg? (keyword "error" (name (:error @ui))))
+                       (t (keyword "error" (name (:error @ui))))
+                       (t :error/generic {:code (name (:error @ui))}))
+                     "problem")
+
+            (and (not allowed?) (:reason curr-prev))
             (caption (t (keyword "approval" (str "reason-" (name (:reason curr-prev)))))
                      "problem"))]]
         [:div {:class "dialog__actions"}
