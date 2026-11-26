@@ -6,6 +6,7 @@
   :audit に残す（誰が・いつ・何を・人か agent か）。"
   (:require [clojure.string :as str]
             #?(:clj [clojure.edn :as edn] :cljs [cljs.reader :as edn])
+            [kaisha.approval :as approval]
             [kaisha.books :as books]
             [kaisha.chat :as chat]
             [kaisha.company :as co]
@@ -102,18 +103,28 @@
         (err state :unknown-member))
 
       :company/set
-      (let [c2 (merge c (:patch ev))
-            problems (filter #(= :error (:severity %)) (co/validate c2))]
-        (if (seq problems)
-          (err state :invalid-company :problems (vec problems))
-          (ok (assoc state :company c2))))
+      (cond
+        (or (contains? (:patch ev) :company/officers) (contains? (:patch ev) :company/members))
+        (err state :disallowed-patch)
+        :else
+        (let [c2 (merge c (:patch ev))
+              problems (filter #(= :error (:severity %)) (co/validate c2))]
+          (if (seq problems)
+            (err state :invalid-company :problems (vec problems))
+            (ok (assoc state :company c2)))))
 
       :officer/verify
-      (if (and (find-by :officer/id (:id ev) (:company/officers c)) (d/valid? on))
-        (ok (update-in state [:company :company/officers]
-                       (fn [os] (mapv #(if (= (:id ev) (:officer/id %))
-                                         (assoc % :officer/authority-verified-on on) %) os))))
-        (err state :unknown-officer))
+      (let [o (find-by :officer/id (:id ev) (:company/officers c))
+            evidence (or (:evidence ev) (:officer/authority-evidence ev))]
+        (cond
+          (nil? o) (err state :unknown-officer)
+          (str/blank? evidence) (err state :missing-evidence)
+          (not (d/valid? on)) (err state :invalid-date)
+          (not (approval/officer-verification-eligible? o)) (err state :no-representative-authority)
+          :else (ok (update-in state [:company :company/officers]
+                               (fn [os] (mapv #(if (= (:id ev) (:officer/id %))
+                                                 (assoc % :officer/authority-verified-on on
+                                                          :officer/authority-evidence evidence) %) os))))))
 
       :officer/add
       (let [o (select-keys (:officer ev) [:officer/id :officer/name :officer/roles :officer/elected-on])
@@ -275,15 +286,18 @@
 (defn dispatch
   "操作を 1 つ適用する。返り値 {:state s} または {:state 元の s :error kw ...}。"
   [state ev]
-  (let [res (step state ev)]
-    (if (or (:error res) (unaudited (:type ev)))
-      res
-      (update-in res [:state :audit] (fnil conj [])
-                 {:at (or (:at ev) (:on ev)) :actor (:actor/id (:actor state))
-                  :kind (:actor/kind (:actor state)) :type (:type ev)
-                  :target (or (:id ev) (:channel ev) (get-in ev [:ringi :ringi/id])
-                              (get-in ev [:meeting :meeting/id]) (get-in ev [:officer :officer/id])
-                              (get-in ev [:member :member/id]))}))))
+  (let [kind (get-in state [:actor :actor/kind])]
+    (if (and (= :agent kind) (approval/human-only? (:type ev)))
+      (err state :human-only)
+      (let [res (step state ev)]
+        (if (or (:error res) (unaudited (:type ev)))
+          res
+          (update-in res [:state :audit] (fnil conj [])
+                     {:at (or (:at ev) (:on ev)) :actor (:actor/id (:actor state))
+                      :kind (:actor/kind (:actor state)) :type (:type ev)
+                      :target (or (:id ev) (:channel ev) (get-in ev [:ringi :ringi/id])
+                                  (get-in ev [:meeting :meeting/id]) (get-in ev [:officer :officer/id])
+                                  (get-in ev [:member :member/id]))}))))))
 
 (defn- valid-actor? [a]
   (and (map? a) (string? (:actor/id a)) (not (str/blank? (:actor/id a)))
