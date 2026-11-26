@@ -6,6 +6,7 @@
   "license": "Apache-2.0",
   "scripts": {
     "build": "node scripts/build.mjs",
+    "test:ui": "node scripts/test-approval-ui.mjs",
     "tauri": "tauri",
     "build:desktop": "npm run build && tauri build --no-bundle",
     "build:android": "npm run build && tauri android build --apk --target aarch64"

@@ -1028,6 +1028,26 @@
           #(let [s (app/sample)] (reset! state s) (save! s) (go! :confirm-reset false :screen nil :vote nil :tab :home))
           {:destructive? true})]]])
 
+(defn- update-approval-evidence! [^js textarea v]
+  (swap! ui assoc-in [:approval-dialog :evidence] v)
+  (when-let [dialog (.closest textarea ".dialog")]
+    (let [{:keys [op ev]} (:approval-dialog @ui)
+          lang (:lang @ui)
+          curr-prev (approval/preview @state op (cond-> ev
+                                                  (= (approval/normalize-op op) :officer.verify)
+                                                  (assoc :evidence (or v "")))
+                                      {:lang lang})
+          allowed? (:allowed? curr-prev)
+          effects (:effects curr-prev)]
+      (when-let [eff-el (.querySelector dialog "[data-approval-effects]")]
+        (.replaceChildren eff-el (h (for [eff effects] [:li eff]))))
+      (when-let [reason-el (.querySelector dialog "[data-approval-reason]")]
+        (if (and (not allowed?) (:reason curr-prev))
+          (.replaceChildren reason-el (h (caption (t (keyword "approval" (str "reason-" (name (:reason curr-prev))))) "problem")))
+          (.replaceChildren reason-el)))
+      (when-let [confirm-btn (.querySelector dialog "[data-approval-confirm]")]
+        (set! (.-disabled confirm-btn) (not allowed?))))))
+
 (defn- approval-dialog []
   (when-let [{:keys [op ev evidence on-success]} (:approval-dialog @ui)]
     (let [lang (:lang @ui)
@@ -1045,36 +1065,40 @@
          [:div {:class "chips"}
           (chip :warning (t :approval/irreversible))
           (chip :neutral (t :approval/human-only))]
-         (when (seq effects)
-           [:ul {:class "approval-effects"}
-            (for [eff effects]
-              [:li eff])])
+         [:ul {:class "approval-effects" :data-approval-effects "true"}
+          (for [eff effects]
+            [:li eff])]
          (when (= (approval/normalize-op op) :officer.verify)
            [:div {:class "field-group"}
             (field (t :approval/evidence-label)
                    [:textarea {:name "evidence" :rows 3 :required true
                                :placeholder (t :approval/evidence-placeholder)
                                :value (or evidence "")
-                               :on-input #(let [v (.. % -target -value)]
-                                            (swap! ui assoc-in [:approval-dialog :evidence] v)
-                                            (render!))}])
+                               :on-input #(update-approval-evidence! (.-currentTarget %) (.. % -target -value))
+                               :on-change #(update-approval-evidence! (.-currentTarget %) (.. % -target -value))}])
             (caption (t :approval/evidence-note))])
-         (when (and (not allowed?) (:reason curr-prev))
-           (caption (t (keyword "approval" (str "reason-" (name (:reason curr-prev)))))
-                    "problem"))]
+         [:div {:data-approval-reason "true"}
+          (when (and (not allowed?) (:reason curr-prev))
+            (caption (t (keyword "approval" (str "reason-" (name (:reason curr-prev)))))
+                     "problem"))]]
         [:div {:class "dialog__actions"}
          (btn :text (t :common/cancel) #(go! :approval-dialog nil))
-         (btn :primary (t :approval/confirm)
-              (fn []
-                (let [final-ev (cond-> ev
-                                 (= (approval/normalize-op op) :officer.verify)
-                                 (assoc :evidence (or evidence "")))]
-                  (when (act! final-ev)
-                    (let [cb on-success]
-                      (swap! ui dissoc :approval-dialog)
-                      (when cb (cb))
-                      (render!)))))
-              {:disabled? (not allowed?) :destructive? (= (:decision ev) :reject)})]]])))
+         [:button {:class "awai-button awai-button--primary"
+                   :data-approval-confirm "true"
+                   :data-destructive (when (= (:decision ev) :reject) "true")
+                   :disabled (not allowed?)
+                   :type "button"
+                   :on-click (fn []
+                               (let [latest-evidence (get-in @ui [:approval-dialog :evidence] (or evidence ""))
+                                     final-ev (cond-> ev
+                                                (= (approval/normalize-op op) :officer.verify)
+                                                (assoc :evidence (or latest-evidence "")))]
+                                 (when (act! final-ev)
+                                   (let [cb on-success]
+                                     (swap! ui dissoc :approval-dialog)
+                                     (when cb (cb))
+                                     (render!)))))}
+          (t :approval/confirm)]]]])))
 
 (defn- error-banner []
   (when-let [e (:error @ui)]

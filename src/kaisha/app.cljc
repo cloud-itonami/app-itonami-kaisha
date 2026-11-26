@@ -119,10 +119,10 @@
         (cond
           (nil? o) (err state :unknown-officer)
           (str/blank? evidence) (err state :missing-evidence)
-          (and (some? on) (not (d/valid? on))) (err state :invalid-date)
+          (not (d/valid? on)) (err state :invalid-date)
           :else (ok (update-in state [:company :company/officers]
                                (fn [os] (mapv #(if (= (:id ev) (:officer/id %))
-                                                 (assoc % :officer/authority-verified-on (or on (:on ev))
+                                                 (assoc % :officer/authority-verified-on on
                                                           :officer/authority-evidence evidence) %) os))))))
 
       :officer/add

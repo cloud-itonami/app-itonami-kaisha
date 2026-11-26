@@ -628,27 +628,74 @@
 
 (deftest officer-verify-evidence-and-patch-guard
   (let [s (app/sample)]
-    (testing "officer/verify で証跡が state に保存される"
+    (testing "officer/verify で有効な確認日と証跡があれば state と audit に保存される"
       (let [r (app/dispatch s {:type :officer/verify :id "yamada" :on "2026-11-20" :evidence "法務局取得 履歴事項全部証明書"})]
         (is (nil? (:error r)))
         (let [o (app/find-by :officer/id "yamada" (get-in r [:state :company :company/officers]))]
           (is (= "法務局取得 履歴事項全部証明書" (:officer/authority-evidence o)))
-          (is (= "2026-11-20" (:officer/authority-verified-on o))))))
-    (testing "officer/verify は証跡未入力だと dispatch で拒否される"
-      (is (= :missing-evidence (:error (app/dispatch s {:type :officer/verify :id "yamada" :on "2026-11-20" :evidence ""}))))
-      (is (= :missing-evidence (:error (app/dispatch s {:type :officer/verify :id "yamada" :on "2026-11-20"})))))
+          (is (= "2026-11-20" (:officer/authority-verified-on o))))
+        (is (= :officer/verify (:type (last (get-in r [:state :audit])))))
+        (is (= "yamada" (:target (last (get-in r [:state :audit])))))))
+    (testing "officer/verify は確認日 on が nil/欠落していると :invalid-date で拒否され、state と audit は不変"
+      (let [r (app/dispatch s {:type :officer/verify :id "yamada" :evidence "法務局取得 履歴事項全部証明書"})]
+        (is (= :invalid-date (:error r)))
+        (is (= s (:state r)) "state そのものが一切変わらないこと")
+        (is (= (:audit s) (get-in r [:state :audit])) "audit に追記されないこと")
+        (let [o (app/find-by :officer/id "yamada" (get-in r [:state :company :company/officers]))]
+          (is (nil? (:officer/authority-verified-on o)))
+          (is (nil? (:officer/authority-evidence o))))))
+    (testing "officer/verify は不正な日付形式だと :invalid-date で拒否され、state と audit は不変"
+      (let [r1 (app/dispatch s {:type :officer/verify :id "yamada" :on "invalid-date" :evidence "証明書"})
+            r2 (app/dispatch s {:type :officer/verify :id "yamada" :on "2026-02-30" :evidence "証明書"})]
+        (is (= :invalid-date (:error r1)))
+        (is (= :invalid-date (:error r2)))
+        (is (= s (:state r1)))
+        (is (= s (:state r2)))
+        (is (= (:audit s) (get-in r1 [:state :audit])))
+        (is (= (:audit s) (get-in r2 [:state :audit])))))
+    (testing "officer/verify は証跡未入力だと dispatch で拒否され、state と audit は不変"
+      (let [r1 (app/dispatch s {:type :officer/verify :id "yamada" :on "2026-11-20" :evidence ""})
+            r2 (app/dispatch s {:type :officer/verify :id "yamada" :on "2026-11-20"})]
+        (is (= :missing-evidence (:error r1)))
+        (is (= :missing-evidence (:error r2)))
+        (is (= s (:state r1)))
+        (is (= s (:state r2)))
+        (is (= (:audit s) (get-in r1 [:state :audit])))
+        (is (= (:audit s) (get-in r2 [:state :audit])))))
     (testing "company/set による役員・メンバーの直接改ざんは拒否される（P2 ガード）"
       (is (= :disallowed-patch (:error (app/dispatch s {:type :company/set :patch {:company/officers []}}))))
       (is (= :disallowed-patch (:error (app/dispatch s {:type :company/set :patch {:company/members []}})))))))
 
 (deftest approval-dialog-cancellation-preserves-state
-  (testing "承認ダイアログを開いてキャンセルしても state は一切変更されない"
+  (testing "preview の実行とダイアログのキャンセル（未 dispatch）で state と audit は完全に不変"
     (let [s (app/sample)
-          dialog-state {:op :officer.verify :ev {:type :officer/verify :id "yamada"} :evidence "メモ"}
-          ;; UI atom でダイアログを開き、キャンセルしたシミュレーション
-          ui-open {:approval-dialog dialog-state}
-          ui-cancel (dissoc ui-open :approval-dialog)]
-      (is (some? (:approval-dialog ui-open)))
-      (is (nil? (:approval-dialog ui-cancel)))
-      ;; state そのものは一切変更されない
-      (is (= s (app/sample))))))
+          initial-officers (get-in s [:company :company/officers])
+          initial-audit (:audit s)]
+      ;; 1. preview を実行して承認カードの内容を計算（dry-run）
+      (let [p-init (approval/preview s :officer.verify {:id "yamada" :evidence ""})
+            p-typed (approval/preview s :officer.verify {:id "yamada" :evidence "登記事項証明書確認"})]
+        (is (false? (:allowed? p-init)))
+        (is (= :missing-evidence (:reason p-init)))
+        (is (true? (:allowed? p-typed)))
+        (is (nil? (:reason p-typed))))
+      ;; 2. キャンセル操作: dispatch を行わずにダイアログを閉じた状態
+      ;; state, officers, audit すべてが操作前の状態と厳密に一致することを検証
+      (is (= s (app/sample)))
+      (is (= initial-officers (get-in s [:company :company/officers])))
+      (is (= initial-audit (:audit s)))
+      (let [o (app/find-by :officer/id "yamada" (get-in s [:company :company/officers]))]
+        (is (nil? (:officer/authority-verified-on o)))
+        (is (nil? (:officer/authority-evidence o))))
+
+      ;; 3. 他の 4 つの op についても preview が副作用を持たず、キャンセル時に state を変更しないことを確認
+      (let [ops [[:ringi.decide {:id "r1" :decision :approve}]
+                 [:member.permissions.set {:id "hanako" :permissions [:approve]}]
+                 [:meeting.vote {:id "board-2026-12" :agenda "a1"
+                                 :vote {:present #{"yamada" "suzuki"} :for #{"yamada" "suzuki"} :interested #{}}}]
+                 [:books.advance {:step :audited}]]]
+        (doseq [[op args] ops]
+          (let [prev (approval/preview s op args)]
+            (is (map? prev))
+            (is (boolean? (:irreversible? prev)))
+            (is (boolean? (:human-only? prev)))))
+        (is (= s (app/sample)))))))
