@@ -15,7 +15,8 @@
     :officer.verify :officer/verify
     :member.permissions.set :member/set-permissions
     :meeting.vote :meeting/vote
-    :books.advance :books/advance})
+    :books.advance :books/advance
+    :data.reset-demo :data/reset-demo})
 
 (defn normalize-op
   "op の表記ゆれ（keyword の namespace 有無や文字列）を揃える。"
@@ -26,6 +27,7 @@
     (:member.permissions.set :member/set-permissions "member.permissions.set") :member.permissions.set
     (:meeting.vote :meeting/vote "meeting.vote") :meeting.vote
     (:books.advance :books/advance "books.advance") :books.advance
+    (:data.reset-demo :data/reset-demo "data.reset-demo") :data.reset-demo
     op))
 
 (defn human-only?
@@ -489,6 +491,51 @@
 
 ;; ---------------------------------------------------------------- 公開 preview 関数
 
+(defn reset-preview
+  "現在の state から初期化（架空データへのリセット）によって失われる件数を計算する。
+  すべて純粋な関数で、state を変更しない。"
+  [state]
+  (let [co (if (seq (:company state)) 1 0)
+        officers (count (get-in state [:company :company/officers]))
+        members (count (get-in state [:company :company/members]))
+        meetings (count (:meetings state))
+        ringi (count (:ringi state))
+        financials (count (get-in state [:financials :fs/history]))
+        chat (reduce + 0 (map (comp count :channel/messages) (vals (get-in state [:space :channels]))))
+        registrations (count (:registrations state))
+        procedures (count (:procedures state))
+        audit (count (:audit state))]
+    {:company co
+     :officers officers
+     :members members
+     :meetings meetings
+     :ringi ringi
+     :financials financials
+     :chat chat
+     :registrations registrations
+     :procedures procedures
+     :audit audit}))
+
+(defn- preview-data-reset-demo [state args opts]
+  (let [lang (or (:lang opts) (:lang args) :ja)
+        counts (reset-preview state)
+        {:keys [company officers members meetings ringi financials chat]} counts
+        fixture-text (if (= :ja lang)
+                       "戻す先: 架空商事株式会社（初期データ）"
+                       "Restore target: Kakū Shōji K.K. (demo data)")
+        counts-text (if (= :ja lang)
+                      (str "失われる件数: 会社 " company "件、役員 " officers "件、メンバー " members "件、会議 " meetings "件、稟議 " ringi "件、会計 " financials "件、会話 " chat "件")
+                      (str "Lost items: " company " company, " officers " officers, " members " members, " meetings " meetings, " ringi " approvals, " financials " accounts, " chat " messages"))
+        irreversible-text (if (= :ja lang)
+                            "この操作は取り消せません。"
+                            "This operation cannot be undone.")]
+    {:allowed? true
+     :reason nil
+     :counts counts
+     :effects [fixture-text counts-text irreversible-text]
+     :irreversible? true
+     :human-only? true}))
+
 (defn preview
   "操作の dry-run。state は変更せず、許可・拒否・効果・不可逆性・人のみの属性を返す。"
   ([state op args] (preview state op args {}))
@@ -499,4 +546,5 @@
      :member.permissions.set (preview-member-permissions state args opts)
      :meeting.vote (preview-meeting-vote state args opts)
      :books.advance (preview-books-advance state args opts)
+     :data.reset-demo (preview-data-reset-demo state args opts)
      {:allowed? false :reason :unknown-op :effects [] :irreversible? false :human-only? false})))

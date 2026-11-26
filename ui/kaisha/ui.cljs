@@ -106,14 +106,14 @@
   (apply swap! ui assoc :error nil :problems nil kvs)
   (render!)
   (.scrollTo js/window 0 0)
-  (when (or (:confirm-reset @ui) (:approval-dialog @ui))
-    (some-> (.querySelector js/document ".dialog button") .focus)))
+  (when (:approval-dialog @ui)
+    (some-> (.querySelector js/document ".dialog") (.querySelector "button") .focus)))
 
 (defn- open-approval!
   [op ev opener-id & [on-success]]
   (swap! ui assoc :approval-dialog {:op op :ev ev :evidence "" :opener-id opener-id :on-success on-success})
   (render!)
-  (some-> (.querySelector js/document ".dialog button") .focus))
+  (some-> (.querySelector js/document ".dialog") (.querySelector "button") .focus))
 
 (defn- cancel-approval! []
   (let [opener-id (get-in @ui [:approval-dialog :opener-id])]
@@ -155,8 +155,8 @@
              :type (or type "button")
              :on-click on-click} label]))
 
-(defn- approval-btn [style label id op ev & [opts]]
-  (btn style label #(open-approval! op ev id) (assoc opts :id id)))
+(defn- approval-btn [style label id op ev & [opts on-success]]
+  (btn style label #(open-approval! op ev id on-success) (assoc opts :id id)))
 
 (defn- field
   "DS / Field: ラベルと、単位つきの入力欄。"
@@ -908,7 +908,9 @@
               (caption (t :settings/law-detail {:n (count law/sources) :date (:pack/checked-on law/pack) :review (:pack/review-by law/pack)})))
      (section (t :settings/data)
               (caption (t :app/saved-locally) "text")
-              (btn :primary (t :reset/confirm) #(go! :confirm-reset true) {:destructive? true})))))
+              (approval-btn :primary (t :reset/confirm) "reset-demo-btn" :data.reset-demo {:type :data/reset-demo}
+                            {:destructive? true}
+                            #(go! :screen nil :vote nil :tab :home))))))
 
 (defn- company-view []
   (let [c (:company @state)
@@ -1036,17 +1038,6 @@
    :move {:title :proc/move-title :subtitle :proc/move-subtitle :parent nil}
    :procedure {:title :proc/candidates-title :parent nil}})
 
-(defn- reset-dialog []
-  [:div {:class "scrim" :on-keydown #(when (= "Escape" (.-key %)) (go! :confirm-reset false))}
-   [:div {:class "dialog" :role "alertdialog" :aria-modal "true" :aria-labelledby "reset-title" :aria-describedby "reset-body"}
-    [:h2 {:id "reset-title"} (t :reset/title)]
-    [:p {:id "reset-body"} (t :reset/body)]
-    [:div {:class "dialog__actions"}
-     (btn :text (t :common/cancel) #(go! :confirm-reset false))
-     (btn :primary (t :reset/confirm)
-          #(let [s (app/sample)] (reset! state s) (save! s) (go! :confirm-reset false :screen nil :vote nil :tab :home))
-          {:destructive? true})]]])
-
 (defn- update-approval-evidence! [^js textarea v]
   (swap! ui assoc-in [:approval-dialog :evidence] v)
   (when-let [dialog (.closest textarea ".dialog")]
@@ -1104,7 +1095,8 @@
          (btn :text (t :common/cancel) cancel-approval!)
          [:button {:class "awai-button awai-button--primary"
                    :data-approval-confirm "true"
-                   :data-destructive (when (= (:decision ev) :reject) "true")
+                   :data-destructive (when (or (= (:decision ev) :reject)
+                                               (= (approval/normalize-op op) :data.reset-demo)) "true")
                    :disabled (not allowed?)
                    :type "button"
                    :on-click (fn []
@@ -1137,10 +1129,9 @@
         screen (:screen @ui)
         m (when vote (app/find-by :meeting/id (:meeting vote) (:meetings s)))
         a (when m (app/find-by :agenda/id (:agenda vote) (:meeting/agenda m)))
-        confirm? (:confirm-reset @ui)
         approval? (:approval-dialog @ui)]
     (list
-    [:div {:class "shell" :inert (boolean (or confirm? approval?))}
+    [:div {:class "shell" :inert (boolean approval?)}
      (cond
        screen (app-bar {:title (t (get-in screens [screen :title]))
                         :subtitle (cond (= screen :settings) (get-in s [:company :company/name])
@@ -1180,7 +1171,6 @@
                :on-click #(do (.preventDefault %) (go! :tab k :vote nil))}
            [:span {:class "tab__indicator"} (icon ic)]
            [:span {:class "tab__label"} (t (keyword "tab" (name k)))]])])]
-    (when confirm? (reset-dialog))
     (when approval? (approval-dialog)))))
 
 (defn render! []
