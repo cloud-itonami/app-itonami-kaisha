@@ -165,6 +165,11 @@
          :irreversible? true
          :human-only? true}))))
 
+(defn officer-verification-eligible?
+  "登記事項による代表権確認の対象役職かどうか。"
+  [officer]
+  (boolean (some #{:representative-director :representative-member} (:officer/roles officer))))
+
 (defn- preview-officer-verify [state args opts]
   (let [lang (or (:lang opts) (:lang args) :ja)
         c (:company state)
@@ -175,7 +180,7 @@
       (nil? o)
       {:allowed? false :reason :unknown-officer :effects [] :irreversible? true :human-only? true}
 
-      (not (some #{:representative-director :representative-member} (:officer/roles o)))
+      (not (officer-verification-eligible? o))
       {:allowed? false
        :status :blocked
        :reason :no-representative-authority

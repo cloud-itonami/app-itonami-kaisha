@@ -168,7 +168,6 @@ class MockDocument extends MockNode {
     this.documentElement.appendChild(this.body);
     this.appendChild(this.documentElement);
     this.activeElement = this.body;
-    this.elementsById = new Map();
   }
   createElement(tag) {
     return new MockElement(tag);
@@ -180,7 +179,7 @@ class MockDocument extends MockNode {
     return new MockNode(11, '#document-fragment');
   }
   getElementById(id) {
-    return this.elementsById.get(id) || null;
+    return this.querySelectorAll('[id]').find(el => el.getAttribute('id') === id) ?? null;
   }
   querySelector(sel) {
     return this.documentElement.querySelector(sel);
@@ -219,11 +218,10 @@ global.document = new MockDocument();
 const appRoot = global.document.createElement('div');
 appRoot.setAttribute('id', 'app');
 global.document.body.appendChild(appRoot);
-global.document.elementsById.set('app', appRoot);
 
 async function run() {
   console.log('1. Loading Kaisha app...');
-  await import('/Users/node/orca/workspaces/app-itonami-kaisha/kaisha-p2-approval-card/dist/main.js');
+  await import('../dist/main.js');
   
   console.log('2. Finding representative officer verify button on Home screen...');
   const verifyBtn = appRoot.querySelectorAll('button').find(b => b.textContent.includes('登記事項で確認した'));
@@ -232,6 +230,7 @@ async function run() {
   }
 
   console.log('3. Opening approval dialog for officer.verify...');
+  const storedBeforeCancel = JSON.stringify([...storage]);
   verifyBtn.dispatchEvent({ type: 'click' });
 
   // Verify dialog presence and attributes
@@ -299,26 +298,32 @@ async function run() {
   }
   console.log('   In-place dynamic updates verified: effects reflect evidence, error message cleared.');
 
-  console.log('5. Testing Cancel / Escape: verifying uncommitted state is discarded...');
-  const scrim = appRoot.querySelector('.scrim');
-  scrim.dispatchEvent({ type: 'keydown', key: 'Escape' });
-
-  // Dialog must be closed
-  if (appRoot.querySelector('.dialog')) {
-    throw new Error('Dialog did not close on Escape');
+  console.log('5. Testing Escape and Cancel: focus restoration and unchanged storage...');
+  function assertCancelled(opener, method) {
+    if (appRoot.querySelector('.dialog')) throw new Error(`Dialog did not close on ${method}`);
+    const restored = global.document.getElementById(opener.getAttribute('id'));
+    if (!restored || restored === opener || global.document.activeElement !== restored) {
+      throw new Error(`${method} did not restore focus to the rebuilt opener`);
+    }
+    if (JSON.stringify([...storage]) !== storedBeforeCancel) {
+      throw new Error(`${method} modified storage`);
+    }
+    return restored;
   }
 
-  // Storage must NOT contain the unconfirmed evidence
-  const storedJson = storage.get('itonami.kaisha.state.v2');
-  if (storedJson && (storedJson.includes(':officer/authority-evidence "登記事項証明書 確認済み"') ||
-                     storedJson.includes('登記事項証明書 確認済み'))) {
-    throw new Error('Cancelled evidence was incorrectly persisted to storage!');
-  }
-  console.log('   Escape closed dialog. Stored state remains completely unmodified.');
+  global.document.activeElement.dispatchEvent({ type: 'keydown', key: 'Escape', bubbles: true });
+  const restoredAfterEscape = assertCancelled(verifyBtn, 'Escape');
+  restoredAfterEscape.dispatchEvent({ type: 'click' });
+
+  const cancelDialog = appRoot.querySelector('.dialog');
+  const cancelEvidence = cancelDialog.querySelector('textarea[name="evidence"]');
+  cancelEvidence.value = '取消する証跡';
+  cancelEvidence.dispatchEvent({ type: 'input' });
+  cancelDialog.querySelectorAll('button').find(b => b.textContent === 'やめる').dispatchEvent({ type: 'click' });
+  const restoredAfterCancel = assertCancelled(restoredAfterEscape, 'Cancel');
 
   console.log('6. Testing Confirm flow: reopen, enter evidence, and confirm...');
-  const verifyBtn2 = appRoot.querySelectorAll('button').find(b => b.textContent.includes('登記事項で確認した'));
-  verifyBtn2.dispatchEvent({ type: 'click' });
+  restoredAfterCancel.dispatchEvent({ type: 'click' });
 
   const dialog2 = appRoot.querySelector('.dialog');
   const textarea2 = dialog2.querySelector('textarea[name="evidence"]');
@@ -344,7 +349,7 @@ async function run() {
   }
   console.log('   Confirmation succeeded. Evidence and verification date persisted to state and audit.');
 
-  console.log('\nALL UI TESTS PASSED SUCCESSFULLY! (Focus retention, IME safety, and Escape/Confirm verified)');
+  console.log('\nALL UI TESTS PASSED SUCCESSFULLY! (Focus retention, IME safety, Escape, Cancel, and Confirm verified)');
 }
 
 run().catch(err => {

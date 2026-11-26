@@ -520,11 +520,16 @@
         (is (false? (:allowed? p)))
         (is (= :missing-evidence (:reason p)))
         (is (some #(re-find #"証跡の入力が必要です" %) (:effects p)))))
-    (testing "blocked: 代表権を持たない役員（平取締役）"
-      (let [p (approval/preview s :officer.verify {:id "sato" :evidence "メモ"})]
+    (testing "平取締役は有効な確認日と証跡があっても preview と確定で拒否される"
+      (let [ev {:type :officer/verify :id "sato" :on "2026-11-20"
+                :evidence "法務局取得 履歴事項全部証明書"}
+            p (approval/preview s :officer.verify ev)
+            r (app/dispatch s ev)]
         (is (false? (:allowed? p)))
         (is (= :blocked (:status p)))
-        (is (= :no-representative-authority (:reason p)))))))
+        (is (= :no-representative-authority (:reason p) (:error r)))
+        (is (= s (:state r)))
+        (is (= (:audit s) (get-in r [:state :audit])))))))
 
 (deftest approval-preview-member-permissions
   (let [s (app/sample)]

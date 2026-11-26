@@ -120,6 +120,7 @@
           (nil? o) (err state :unknown-officer)
           (str/blank? evidence) (err state :missing-evidence)
           (not (d/valid? on)) (err state :invalid-date)
+          (not (approval/officer-verification-eligible? o)) (err state :no-representative-authority)
           :else (ok (update-in state [:company :company/officers]
                                (fn [os] (mapv #(if (= (:id ev) (:officer/id %))
                                                  (assoc % :officer/authority-verified-on on

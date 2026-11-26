@@ -110,11 +110,18 @@
     (some-> (.querySelector js/document ".dialog button") .focus)))
 
 (defn- open-approval!
-  ([op ev] (open-approval! op ev {}))
-  ([op ev opts]
-   (swap! ui assoc :approval-dialog {:op op :ev ev :evidence "" :on-success (:on-success opts)})
-   (render!)
-   (some-> (.querySelector js/document ".dialog button") .focus)))
+  [op ev opener-id & [on-success]]
+  (swap! ui assoc :approval-dialog {:op op :ev ev :evidence "" :opener-id opener-id :on-success on-success})
+  (render!)
+  (some-> (.querySelector js/document ".dialog button") .focus))
+
+(defn- cancel-approval! []
+  (let [opener-id (get-in @ui [:approval-dialog :opener-id])]
+    (go! :approval-dialog nil)
+    (when-let [opener (.getElementById js/document opener-id)]
+      (when-let [details (.closest opener "details")]
+        (set! (.-open details) true))
+      (.focus opener))))
 
 (defn- form-values [^js e]
   (.preventDefault e)
@@ -140,12 +147,16 @@
 
 (defn- btn
   ([style label on-click] (btn style label on-click {}))
-  ([style label on-click {:keys [destructive? disabled? type]}]
+  ([style label on-click {:keys [id destructive? disabled? type]}]
    [:button {:class (str "awai-button awai-button--" (name style))
+             :id id
              :data-destructive (when destructive? "true")
              :disabled disabled?
              :type (or type "button")
              :on-click on-click} label]))
+
+(defn- approval-btn [style label id op ev & [opts]]
+  (btn style label #(open-approval! op ev id) (assoc opts :id id)))
 
 (defn- field
   "DS / Field: ラベルと、単位つきの入力欄。"
@@ -201,7 +212,8 @@
        (if (= :ok (:status rep))
          (caption (t :officer/representative-ok {:date (:officer/authority-verified-on o)}))
          (list [:div {:class "chips"} (chip :warning (t :officer/representative-unverified))]
-               (btn :tonal (t :officer/verify) #(open-approval! :officer.verify {:type :officer/verify :id (:officer/id o)}))))))))
+               (approval-btn :tonal (t :officer/verify) (str "home-verify-" (:officer/id o))
+                             :officer.verify {:type :officer/verify :id (:officer/id o)})))))))
 
 (defn- home-view []
   (let [s @state
@@ -386,7 +398,7 @@
                                     :vote (if board?
                                             {:present (pick "present") :for (pick "for") :interested (pick "interested")}
                                             {:rights-total (num "total") :rights-present (num "present") :rights-for (num "for")})}
-                                   {:on-success #(go! :vote nil :tab :meetings)})))}
+                                   "meeting-record-vote" #(go! :vote nil :tab :meetings))))}
         (if board?
           (for [[k label] [["present" :meetings/present] ["for" :meetings/for] ["interested" :meetings/interested]]]
             [:fieldset {:class "checks"} [:legend (t label)]
@@ -397,7 +409,8 @@
         [:div {:class "stats-row" :data-stats true} (seq (:stats p))]
         [:div {:class "chips" :data-preview true} (:chip p)]
         (caption (t :vote/disclaimer {:law (law/short-title law-id)}))
-        [:button {:class "awai-button awai-button--primary" :type "submit" :data-submit true} (t :meetings/record)]]))))
+        [:button {:class "awai-button awai-button--primary" :type "submit" :data-submit true
+                  :id "meeting-record-vote"} (t :meetings/record)]]))))
 
 ;; ---------------------------------------------------------------- 稟議（K4・S5・S6）
 
@@ -440,8 +453,10 @@
        :draft (when (= me (:ringi/drafter r))
                 (btn :primary (t :ringi/submit) #(act! {:type :ringi/submit :id (:ringi/id r)})))
        :pending [:div {:class "actions"}
-                 (btn :primary (t :ringi/approve) #(open-approval! :ringi.decide {:type :ringi/decide :id (:ringi/id r) :decision :approve}))
-                 (btn :primary (t :ringi/reject) #(open-approval! :ringi.decide {:type :ringi/decide :id (:ringi/id r) :decision :reject}) {:destructive? true})]
+                 (approval-btn :primary (t :ringi/approve) (str "ringi-approve-" (:ringi/id r))
+                               :ringi.decide {:type :ringi/decide :id (:ringi/id r) :decision :approve})
+                 (approval-btn :primary (t :ringi/reject) (str "ringi-reject-" (:ringi/id r))
+                               :ringi.decide {:type :ringi/decide :id (:ringi/id r) :decision :reject} {:destructive? true})]
        :awaiting-board
        (let [opts (passed-board-items (:ringi/category r))]
          (if (seq opts)
@@ -455,7 +470,8 @@
                      (if (= :ok (:status sc))
                        (caption (t :ringi/signer-ok {:name (:officer/name rep) :date (:officer/authority-verified-on rep)}) "text")
                        (list (banner :warning (t :ringi/signer-unverified-title) (t :ringi/signer-unverified-body {:name (:officer/name rep)}))
-                             (btn :tonal (t :officer/verify) #(open-approval! :officer.verify {:type :officer/verify :id (:officer/id rep)}))))))
+                             (approval-btn :tonal (t :officer/verify) (str "ringi-verify-" (:ringi/id r))
+                                           :officer.verify {:type :officer/verify :id (:officer/id rep)})))))
        nil)
      (source-line source))))
 
@@ -542,10 +558,11 @@
                                    [mid aid] (when (:ref v) (str/split (:ref v) #"\|"))]
                                (open-approval! :books.advance
                                                (cond-> {:type :books/advance :step (:step nxt)}
-                                                 mid (assoc :meeting mid :agenda aid))))}
+                                                 mid (assoc :meeting mid :agenda aid))
+                                               "books-advance"))}
           (when needs-res? (field (t :books/resolution) (select "ref" (resolutions-for (:step nxt))) "▾"))
           (btn :primary (t :books/advance {:step (t (keyword "step" (name (:step nxt))))}) nil
-               {:type "submit" :disabled? (not (:balanced? sm))})])
+               {:id "books-advance" :type "submit" :disabled? (not (:balanced? sm))})])
        (seq rows) (caption (t :books/done) "text"))
      (when (and (seq rows) (empty? (:fs/history fs)))
        [:details {:class "disclosure" :open (not (:balanced? sm))}
@@ -955,7 +972,8 @@
                       nil))]
      (when (and rep (= :unverified (:status rep-status)))
        (list [:div {:class "chips"} (chip :warning (t :officers/rep-unverified {:name (:officer/name rep)}))]
-             (btn :tonal (t :officer/verify) #(open-approval! :officer.verify {:type :officer/verify :id (:officer/id rep)}))))
+             (approval-btn :tonal (t :officer/verify) "officers-verify"
+                           :officer.verify {:type :officer/verify :id (:officer/id rep)})))
      (caption (t :officers/note))
      [:details {:class "disclosure"}
       [:summary {:class "awai-button awai-button--primary"} (t :officers/add)]
@@ -981,7 +999,7 @@
   (let [c (:company @state)]
     (list
      [:div {:class "settings-list"}
-      (for [m (:company/members c)]
+      (for [m (:company/members c) :let [opener-id (str "member-permissions-" (:member/id m))]]
         [:details {:class "settings-row-detail"}
          [:summary {:class "settings-row"}
           [:span {:class "settings-row__text"} [:span {:class "settings-row__title"} (:member/name m)]
@@ -991,9 +1009,10 @@
                                              (.preventDefault %)
                                              (open-approval! :member.permissions.set
                                                              {:type :member/set-permissions :id (:member/id m)
-                                                              :permissions (map keyword (js->clj (.getAll fd "perm")))}))}
+                                                              :permissions (map keyword (js->clj (.getAll fd "perm")))}
+                                                             opener-id))}
           (perm-checks (:member/permissions m))
-          (btn :tonal (t :common/save) nil {:type "submit"})]])]
+          (btn :tonal (t :common/save) nil {:id opener-id :type "submit"})]])]
      (caption (t :members/note))
      [:details {:class "disclosure"}
       [:summary {:class "awai-button awai-button--primary"} (t :members/add)]
@@ -1057,7 +1076,7 @@
                                       {:lang lang})
           allowed? (:allowed? curr-prev)
           effects (:effects curr-prev)]
-      [:div {:class "scrim" :on-keydown #(when (= "Escape" (.-key %)) (go! :approval-dialog nil))}
+      [:div {:class "scrim" :on-keydown #(when (= "Escape" (.-key %)) (cancel-approval!))}
        [:div {:class "dialog" :role "alertdialog" :aria-modal "true"
               :aria-labelledby "approval-title" :aria-describedby "approval-desc"}
         [:h2 {:id "approval-title"} (t (keyword "approval" (str "title-" (name (approval/normalize-op op)))))]
@@ -1082,7 +1101,7 @@
             (caption (t (keyword "approval" (str "reason-" (name (:reason curr-prev)))))
                      "problem"))]]
         [:div {:class "dialog__actions"}
-         (btn :text (t :common/cancel) #(go! :approval-dialog nil))
+         (btn :text (t :common/cancel) cancel-approval!)
          [:button {:class "awai-button awai-button--primary"
                    :data-approval-confirm "true"
                    :data-destructive (when (= (:decision ev) :reject) "true")
