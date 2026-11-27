@@ -89,7 +89,7 @@
       el)
     :else (.createTextNode js/document (str x))))
 
-(declare render! procedures-section settings-row section)
+(declare render! procedures-section settings-row section restore-approval-focus!)
 
 (defn- act!
   "操作を適用する。拒まれたら理由を画面に出し、状態は変えない。
@@ -102,12 +102,14 @@
       (do
         (swap! ui assoc :error (:error res) :problems (:problems res))
         (render!)
+        (restore-approval-focus!)
         false)
 
       (not (save! (:state res)))
       (do
         (swap! ui assoc :error :storage-save-failed :problems nil)
         (render!)
+        (restore-approval-focus!)
         false)
 
       :else
@@ -117,18 +119,28 @@
         (render!)
         true))))
 
+(defn- restore-approval-focus! []
+  (when (:approval-dialog @ui)
+    (when-let [dlg (.querySelector js/document ".dialog")]
+      (let [confirm-btn (.querySelector dlg "[data-approval-confirm]")
+            first-btn (.querySelector dlg "button")]
+        (cond
+          (and confirm-btn (not (.-disabled confirm-btn))) (.focus confirm-btn)
+          first-btn (.focus first-btn)
+          :else (.focus dlg))))))
+
 (defn- go! [& kvs]
   (apply swap! ui assoc :error nil :problems nil kvs)
   (render!)
   (.scrollTo js/window 0 0)
   (when (:approval-dialog @ui)
-    (some-> (.querySelector js/document ".dialog") (.querySelector "button") .focus)))
+    (restore-approval-focus!)))
 
 (defn- open-approval!
   [op ev opener-id & [on-success]]
   (swap! ui assoc :approval-dialog {:op op :ev ev :evidence "" :opener-id opener-id :on-success on-success})
   (render!)
-  (some-> (.querySelector js/document ".dialog") (.querySelector "button") .focus))
+  (restore-approval-focus!))
 
 (defn- cancel-approval! []
   (let [opener-id (get-in @ui [:approval-dialog :opener-id])]
@@ -1200,7 +1212,9 @@
         y (.-scrollY js/window)]
     (set! (.-lang (.-documentElement js/document)) (name (:lang @ui)))
     (.replaceChildren root (h (view)))
-    (.scrollTo js/window 0 y)))
+    (.scrollTo js/window 0 y)
+    (when (:approval-dialog @ui)
+      (restore-approval-focus!))))
 
 (defn ^:export init []
   (when (str/starts-with? (or (.-language js/navigator) "ja") "en") (swap! ui assoc :lang :en))

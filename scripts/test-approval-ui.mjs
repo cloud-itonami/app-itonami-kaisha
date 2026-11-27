@@ -12,6 +12,14 @@ class MockNode {
     this.childNodes = [];
     this.parentNode = null;
   }
+  contains(otherNode) {
+    let curr = otherNode;
+    while (curr) {
+      if (curr === this) return true;
+      curr = curr.parentNode;
+    }
+    return false;
+  }
   appendChild(child) {
     if (child.nodeType === 11) { // DocumentFragment
       const children = [...child.childNodes];
@@ -29,6 +37,9 @@ class MockNode {
     if (idx !== -1) {
       this.childNodes.splice(idx, 1);
       child.parentNode = null;
+      if (global.document && global.document.activeElement && (child === global.document.activeElement || child.contains(global.document.activeElement))) {
+        global.document.activeElement = global.document.body;
+      }
     }
     return child;
   }
@@ -441,9 +452,15 @@ async function run() {
 
   const storageBeforeFail = storage.get('itonami.kaisha.state.v2');
 
-  // Set simulated save failure
-  failNextSet = true;
+  // Focus confirm button before initiating action
   const failConfirmBtn = failDialog.querySelector('[data-approval-confirm]');
+  failConfirmBtn.focus();
+  if (global.document.activeElement !== failConfirmBtn) {
+    throw new Error('failConfirmBtn could not be focused');
+  }
+
+  // Set simulated save failure and click confirm
+  failNextSet = true;
   failConfirmBtn.dispatchEvent({ type: 'click' });
   failNextSet = false;
 
@@ -451,6 +468,15 @@ async function run() {
   const stillOpenDialog = appRoot.querySelector('.dialog');
   if (!stillOpenDialog) {
     throw new Error('Dialog closed despite save! failure!');
+  }
+
+  // VERIFY: Focus must be restored inside the still-open dialog (specifically to confirm button)
+  if (!stillOpenDialog.contains(global.document.activeElement)) {
+    throw new Error('Focus was not restored inside the still-open dialog after save! failure');
+  }
+  const currentConfirmBtn = stillOpenDialog.querySelector('[data-approval-confirm]');
+  if (global.document.activeElement !== currentConfirmBtn) {
+    throw new Error('Focus was not restored to the confirm button after save! failure');
   }
 
   // VERIFY: Error reason must be displayed inside dialog
@@ -464,13 +490,19 @@ async function run() {
     throw new Error('Storage was modified despite save! failure!');
   }
 
-  // Close the failure dialog with Cancel
-  stillOpenDialog.querySelectorAll('button').find(b => b.textContent === 'やめる').dispatchEvent({ type: 'click' });
-  const restoredAfterFailCancel = global.document.getElementById('reset-demo-btn');
-  console.log('   save! failure properly kept dialog open, displayed error, and preserved storage.');
+  // VERIFY: Pressing Escape on document.activeElement closes dialog and restores focus to opener
+  global.document.activeElement.dispatchEvent({ type: 'keydown', key: 'Escape', bubbles: true });
+  if (appRoot.querySelector('.dialog')) {
+    throw new Error('Dialog did not close on Escape after save! failure');
+  }
+  const restoredAfterFailEscape = global.document.getElementById('reset-demo-btn');
+  if (!restoredAfterFailEscape || global.document.activeElement !== restoredAfterFailEscape) {
+    throw new Error('Escape after save! failure did not restore focus to reset-demo-btn');
+  }
+  console.log('   save! failure properly kept dialog open, restored focus inside dialog, displayed error, preserved storage, and Escape returned focus to opener.');
 
   console.log('11. Testing successful Confirm flow for reset...');
-  restoredAfterFailCancel.dispatchEvent({ type: 'click' });
+  restoredAfterFailEscape.dispatchEvent({ type: 'click' });
   const dialogToConfirm = appRoot.querySelector('.dialog');
   const finalConfirmBtn = dialogToConfirm.querySelector('[data-approval-confirm]');
   finalConfirmBtn.dispatchEvent({ type: 'click' });
