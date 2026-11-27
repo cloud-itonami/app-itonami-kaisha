@@ -89,7 +89,7 @@
       el)
     :else (.createTextNode js/document (str x))))
 
-(declare render! procedures-section settings-row section restore-approval-focus!)
+(declare render! procedures-section settings-row section focus-approval-dialog!)
 
 (defn- act!
   "操作を適用する。拒まれたら理由を画面に出し、状態は変えない。
@@ -101,15 +101,13 @@
       (:error res)
       (do
         (swap! ui assoc :error (:error res) :problems (:problems res))
-        (render!)
-        (restore-approval-focus!)
+        (render! {:approval-focus :restore})
         false)
 
       (not (save! (:state res)))
       (do
         (swap! ui assoc :error :storage-save-failed :problems nil)
-        (render!)
-        (restore-approval-focus!)
+        (render! {:approval-focus :restore})
         false)
 
       :else
@@ -119,28 +117,39 @@
         (render!)
         true))))
 
-(defn- restore-approval-focus! []
-  (when (:approval-dialog @ui)
-    (when-let [dlg (.querySelector js/document ".dialog")]
-      (let [confirm-btn (.querySelector dlg "[data-approval-confirm]")
-            first-btn (.querySelector dlg "button")]
-        (cond
-          (and confirm-btn (not (.-disabled confirm-btn))) (.focus confirm-btn)
-          first-btn (.focus first-btn)
-          :else (.focus dlg))))))
+(defn- focus-approval-dialog!
+  "承認カード内へフォーカスを置く。
+  初回表示（:initial）では破壊的な確認ボタンを避けキャンセルボタン等の非破壊要素に置き、
+  保存失敗などの再描画時（:restore）は開いたままのカード内（確認ボタン優先）へ復帰する。"
+  ([] (focus-approval-dialog! :initial))
+  ([mode]
+   (when (:approval-dialog @ui)
+     (when-let [dlg (.querySelector js/document ".dialog")]
+       (let [cancel-btn (.querySelector dlg "[data-approval-cancel]")
+             confirm-btn (.querySelector dlg "[data-approval-confirm]")
+             first-btn (.querySelector dlg "button")]
+         (case mode
+           :restore
+           (cond
+             (and confirm-btn (not (.-disabled confirm-btn))) (.focus confirm-btn)
+             cancel-btn (.focus cancel-btn)
+             first-btn (.focus first-btn)
+             :else (.focus dlg))
+
+           (cond
+             cancel-btn (.focus cancel-btn)
+             (and first-btn (not= first-btn confirm-btn)) (.focus first-btn)
+             :else (.focus dlg))))))))
 
 (defn- go! [& kvs]
   (apply swap! ui assoc :error nil :problems nil kvs)
   (render!)
-  (.scrollTo js/window 0 0)
-  (when (:approval-dialog @ui)
-    (restore-approval-focus!)))
+  (.scrollTo js/window 0 0))
 
 (defn- open-approval!
   [op ev opener-id & [on-success]]
   (swap! ui assoc :approval-dialog {:op op :ev ev :evidence "" :opener-id opener-id :on-success on-success})
-  (render!)
-  (restore-approval-focus!))
+  (render! {:approval-focus :initial}))
 
 (defn- cancel-approval! []
   (let [opener-id (get-in @ui [:approval-dialog :opener-id])]
@@ -1095,7 +1104,7 @@
           allowed? (:allowed? curr-prev)
           effects (:effects curr-prev)]
       [:div {:class "scrim" :on-keydown #(when (= "Escape" (.-key %)) (cancel-approval!))}
-       [:div {:class "dialog" :role "alertdialog" :aria-modal "true"
+       [:div {:class "dialog" :role "alertdialog" :aria-modal "true" :tabindex "-1"
               :aria-labelledby "approval-title" :aria-describedby "approval-desc"}
         [:h2 {:id "approval-title"} (t (keyword "approval" (str "title-" (name (approval/normalize-op op)))))]
         [:div {:id "approval-desc" :class "approval-dialog__content"}
@@ -1126,7 +1135,11 @@
             (caption (t (keyword "approval" (str "reason-" (name (:reason curr-prev)))))
                      "problem"))]]
         [:div {:class "dialog__actions"}
-         (btn :text (t :common/cancel) cancel-approval!)
+         [:button {:class "awai-button awai-button--text"
+                   :data-approval-cancel "true"
+                   :type "button"
+                   :on-click cancel-approval!}
+          (t :common/cancel)]
          [:button {:class "awai-button awai-button--primary"
                    :data-approval-confirm "true"
                    :data-destructive (when (or (= (:decision ev) :reject)
@@ -1207,14 +1220,16 @@
            [:span {:class "tab__label"} (t (keyword "tab" (name k)))]])])]
     (when approval? (approval-dialog)))))
 
-(defn render! []
-  (let [root (.getElementById js/document "app")
-        y (.-scrollY js/window)]
-    (set! (.-lang (.-documentElement js/document)) (name (:lang @ui)))
-    (.replaceChildren root (h (view)))
-    (.scrollTo js/window 0 y)
-    (when (:approval-dialog @ui)
-      (restore-approval-focus!))))
+(defn render!
+  ([] (render! {}))
+  ([{:keys [approval-focus] :or {approval-focus :initial}}]
+   (let [root (.getElementById js/document "app")
+         y (.-scrollY js/window)]
+     (set! (.-lang (.-documentElement js/document)) (name (:lang @ui)))
+     (.replaceChildren root (h (view)))
+     (.scrollTo js/window 0 y)
+     (when (:approval-dialog @ui)
+       (focus-approval-dialog! approval-focus)))))
 
 (defn ^:export init []
   (when (str/starts-with? (or (.-language js/navigator) "ja") "en") (swap! ui assoc :lang :en))

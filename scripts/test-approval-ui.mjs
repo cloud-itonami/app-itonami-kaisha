@@ -264,9 +264,14 @@ async function run() {
   // Verify initial dialog content
   const textarea = dialog.querySelector('textarea[name="evidence"]');
   if (!textarea) throw new Error('Evidence textarea not found');
+  const cancelBtn = dialog.querySelector('[data-approval-cancel]');
+  if (!cancelBtn) throw new Error('Cancel button not found');
   const confirmBtn = dialog.querySelector('[data-approval-confirm]');
   if (!confirmBtn) throw new Error('Confirm button not found');
   if (confirmBtn.disabled !== true) throw new Error('Confirm button should initially be disabled');
+  if (!dialog.contains(global.document.activeElement) || global.document.activeElement !== cancelBtn || global.document.activeElement === confirmBtn) {
+    throw new Error('Initial focus on officer.verify dialog should be on non-destructive cancel button, not confirm button');
+  }
 
   const reasonEl = dialog.querySelector('[data-approval-reason]');
   if (!reasonEl || !reasonEl.textContent.includes('証跡を入力してください')) {
@@ -415,12 +420,24 @@ async function run() {
   }
   console.log('   Dry-run counts (including registrations, procedures, and old audit) and warnings verified in effects.');
 
+  const resetCancelBtn = resetDialog.querySelector('[data-approval-cancel]');
+  if (!resetCancelBtn) throw new Error('Cancel button not found in reset dialog');
   const resetConfirmBtn = resetDialog.querySelector('[data-approval-confirm]');
   if (!resetConfirmBtn) throw new Error('Confirm button not found in reset dialog');
   if (resetConfirmBtn.disabled !== false) throw new Error('Confirm button should be enabled for reset');
   if (resetConfirmBtn.getAttribute('data-destructive') !== 'true') {
     throw new Error('Confirm button should have data-destructive="true"');
   }
+  if (!resetDialog.contains(global.document.activeElement)) {
+    throw new Error('Initial focus is not inside reset dialog');
+  }
+  if (global.document.activeElement === resetConfirmBtn) {
+    throw new Error('Initial focus on reset dialog must NOT be on destructive confirm button');
+  }
+  if (global.document.activeElement !== resetCancelBtn) {
+    throw new Error('Initial focus on reset dialog should be on non-destructive cancel button');
+  }
+  console.log('   Initial focus verified on non-destructive cancel button ([data-approval-cancel]), not confirm button.');
 
   console.log('9. Testing Escape and Cancel on reset approval dialog...');
   function assertResetCancelled(opener, method) {
@@ -452,8 +469,14 @@ async function run() {
 
   const storageBeforeFail = storage.get('itonami.kaisha.state.v2');
 
-  // Focus confirm button before initiating action
+  // Verify reopened reset dialog starts with focus on non-destructive cancel button
+  const failCancelBtn = failDialog.querySelector('[data-approval-cancel]');
   const failConfirmBtn = failDialog.querySelector('[data-approval-confirm]');
+  if (!failCancelBtn || global.document.activeElement !== failCancelBtn || global.document.activeElement === failConfirmBtn) {
+    throw new Error('Reopened reset dialog initial focus should be on non-destructive cancel button, not confirm button');
+  }
+
+  // Focus confirm button before initiating action
   failConfirmBtn.focus();
   if (global.document.activeElement !== failConfirmBtn) {
     throw new Error('failConfirmBtn could not be focused');
