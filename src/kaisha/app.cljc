@@ -90,6 +90,11 @@
        :matter (:agenda/matter a)
        :result (:agenda/result a)})))
 
+(defn reset-preview
+  "現在の state から初期化によって失われる件数を計算する純粋関数。"
+  [state]
+  (approval/reset-preview state))
+
 (defn- ok [state] {:state state})
 (defn- err [state code & {:as more}] (merge {:state state :error code} more))
 
@@ -279,6 +284,9 @@
         (ok (update state :space chat/open-dm me (:with ev)))
         (err state :unknown-member))
 
+      :data/reset-demo
+      (ok (sample))
+
       (err state :unknown-event))))
 
 (def ^:private unaudited #{:chat/read :session/as})
@@ -295,7 +303,7 @@
           (update-in res [:state :audit] (fnil conj [])
                      {:at (or (:at ev) (:on ev)) :actor (:actor/id (:actor state))
                       :kind (:actor/kind (:actor state)) :type (:type ev)
-                      :target (or (:id ev) (:channel ev) (get-in ev [:ringi :ringi/id])
+                      :target (or (:target ev) (:id ev) (:channel ev) (get-in ev [:ringi :ringi/id])
                                   (get-in ev [:meeting :meeting/id]) (get-in ev [:officer :officer/id])
                                   (get-in ev [:member :member/id]))}))))))
 

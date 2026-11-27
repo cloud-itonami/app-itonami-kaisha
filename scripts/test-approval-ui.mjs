@@ -12,6 +12,14 @@ class MockNode {
     this.childNodes = [];
     this.parentNode = null;
   }
+  contains(otherNode) {
+    let curr = otherNode;
+    while (curr) {
+      if (curr === this) return true;
+      curr = curr.parentNode;
+    }
+    return false;
+  }
   appendChild(child) {
     if (child.nodeType === 11) { // DocumentFragment
       const children = [...child.childNodes];
@@ -29,6 +37,9 @@ class MockNode {
     if (idx !== -1) {
       this.childNodes.splice(idx, 1);
       child.parentNode = null;
+      if (global.document && global.document.activeElement && (child === global.document.activeElement || child.contains(global.document.activeElement))) {
+        global.document.activeElement = global.document.body;
+      }
     }
     return child;
   }
@@ -191,12 +202,17 @@ class MockDocument extends MockNode {
 
 // Setup environment
 const storage = new Map();
+let failNextSet = false;
 const mockLocalStorage = {
   getItem: (k) => {
     const val = storage.get(k) || null;
     return val;
   },
   setItem: (k, v) => {
+    if (failNextSet) {
+      console.log('setItem simulated FAILURE for:', k);
+      throw new Error('QuotaExceededError: simulated localStorage write failure');
+    }
     console.log('setItem called:', k);
     storage.set(k, String(v));
   },
@@ -248,9 +264,14 @@ async function run() {
   // Verify initial dialog content
   const textarea = dialog.querySelector('textarea[name="evidence"]');
   if (!textarea) throw new Error('Evidence textarea not found');
+  const cancelBtn = dialog.querySelector('[data-approval-cancel]');
+  if (!cancelBtn) throw new Error('Cancel button not found');
   const confirmBtn = dialog.querySelector('[data-approval-confirm]');
   if (!confirmBtn) throw new Error('Confirm button not found');
   if (confirmBtn.disabled !== true) throw new Error('Confirm button should initially be disabled');
+  if (!dialog.contains(global.document.activeElement) || global.document.activeElement !== cancelBtn || global.document.activeElement === confirmBtn) {
+    throw new Error('Initial focus on officer.verify dialog should be on non-destructive cancel button, not confirm button');
+  }
 
   const reasonEl = dialog.querySelector('[data-approval-reason]');
   if (!reasonEl || !reasonEl.textContent.includes('証跡を入力してください')) {
@@ -349,7 +370,189 @@ async function run() {
   }
   console.log('   Confirmation succeeded. Evidence and verification date persisted to state and audit.');
 
-  console.log('\nALL UI TESTS PASSED SUCCESSFULLY! (Focus retention, IME safety, Escape, Cancel, and Confirm verified)');
+  console.log('7. Navigating to Settings to test reset approval card flow...');
+  // Find settings button in header (app-bar)
+  const settingsBtn = appRoot.querySelectorAll('button').find(b => b.getAttribute('aria-label') === '設定を開く');
+  if (!settingsBtn) throw new Error('Settings button not found in app-bar');
+  settingsBtn.dispatchEvent({ type: 'click' });
+
+  // In settings, find the reset-demo-btn
+  const resetBtn = global.document.getElementById('reset-demo-btn');
+  if (!resetBtn) throw new Error('reset-demo-btn not found in settings');
+  console.log('   Found reset button in settings screen.');
+
+  console.log('8. Opening approval dialog for :data/reset-demo...');
+  const storedBeforeReset = JSON.stringify([...storage]);
+  resetBtn.dispatchEvent({ type: 'click' });
+
+  const resetDialog = appRoot.querySelector('.dialog');
+  if (!resetDialog) throw new Error('Reset approval dialog not found');
+  if (resetDialog.getAttribute('role') !== 'alertdialog') throw new Error('Reset dialog does not have role="alertdialog"');
+  if (resetDialog.getAttribute('aria-modal') !== 'true') throw new Error('Reset dialog does not have aria-modal="true"');
+
+  const resetTitle = resetDialog.querySelector('h2');
+  if (!resetTitle || !resetTitle.textContent.includes('架空データ')) {
+    throw new Error(`Unexpected reset dialog title: ${resetTitle?.textContent}`);
+  }
+  console.log('   Reset dialog opened with title:', resetTitle.textContent);
+
+  // Verify chips and effects
+  const chips = resetDialog.querySelectorAll('.chip');
+  const chipTexts = chips.map(c => c.textContent).join(' ');
+  if (!chipTexts.includes('取り消せません') || !chipTexts.includes('人による承認が必要です')) {
+    throw new Error(`Chips do not contain required warnings: ${chipTexts}`);
+  }
+
+  const resetEffectsEl = resetDialog.querySelector('[data-approval-effects]');
+  if (!resetEffectsEl) throw new Error('Reset effects list not found');
+  const effectsText = resetEffectsEl.textContent;
+  if (!effectsText.includes('架空商事株式会社')) {
+    throw new Error(`Effects does not include restore target: ${effectsText}`);
+  }
+  if (!effectsText.includes('失われる件数') || !effectsText.includes('会社 1件')) {
+    throw new Error(`Effects does not include lost items dry-run counts: ${effectsText}`);
+  }
+  if (!effectsText.includes('登記') || !effectsText.includes('手続き') || !effectsText.includes('旧監査')) {
+    throw new Error(`Effects does not include registration, procedure, or old audit counts: ${effectsText}`);
+  }
+  if (!effectsText.includes('取り消せません')) {
+    throw new Error(`Effects does not include irreversible warning: ${effectsText}`);
+  }
+  console.log('   Dry-run counts (including registrations, procedures, and old audit) and warnings verified in effects.');
+
+  const resetCancelBtn = resetDialog.querySelector('[data-approval-cancel]');
+  if (!resetCancelBtn) throw new Error('Cancel button not found in reset dialog');
+  const resetConfirmBtn = resetDialog.querySelector('[data-approval-confirm]');
+  if (!resetConfirmBtn) throw new Error('Confirm button not found in reset dialog');
+  if (resetConfirmBtn.disabled !== false) throw new Error('Confirm button should be enabled for reset');
+  if (resetConfirmBtn.getAttribute('data-destructive') !== 'true') {
+    throw new Error('Confirm button should have data-destructive="true"');
+  }
+  if (!resetDialog.contains(global.document.activeElement)) {
+    throw new Error('Initial focus is not inside reset dialog');
+  }
+  if (global.document.activeElement === resetConfirmBtn) {
+    throw new Error('Initial focus on reset dialog must NOT be on destructive confirm button');
+  }
+  if (global.document.activeElement !== resetCancelBtn) {
+    throw new Error('Initial focus on reset dialog should be on non-destructive cancel button');
+  }
+  console.log('   Initial focus verified on non-destructive cancel button ([data-approval-cancel]), not confirm button.');
+
+  console.log('9. Testing Escape and Cancel on reset approval dialog...');
+  function assertResetCancelled(opener, method) {
+    if (appRoot.querySelector('.dialog')) throw new Error(`Dialog did not close on ${method}`);
+    const restored = global.document.getElementById(opener.getAttribute('id'));
+    if (!restored || restored === opener || global.document.activeElement !== restored) {
+      throw new Error(`${method} did not restore focus to the rebuilt opener`);
+    }
+    if (JSON.stringify([...storage]) !== storedBeforeReset) {
+      throw new Error(`${method} modified storage`);
+    }
+    return restored;
+  }
+
+  global.document.activeElement.dispatchEvent({ type: 'keydown', key: 'Escape', bubbles: true });
+  const restoredResetAfterEscape = assertResetCancelled(resetBtn, 'Escape');
+
+  restoredResetAfterEscape.dispatchEvent({ type: 'click' });
+  const cancelResetDialog = appRoot.querySelector('.dialog');
+  cancelResetDialog.querySelectorAll('button').find(b => b.textContent === 'やめる').dispatchEvent({ type: 'click' });
+  const restoredResetAfterCancel = assertResetCancelled(restoredResetAfterEscape, 'Cancel');
+  console.log('   Escape and Cancel properly preserved storage and restored focus to reset-demo-btn.');
+
+  console.log('10. Testing save! failure regression on reset approval card...');
+  // Open dialog again to test failure handling
+  restoredResetAfterCancel.dispatchEvent({ type: 'click' });
+  const failDialog = appRoot.querySelector('.dialog');
+  if (!failDialog) throw new Error('Reset dialog not open for save failure test');
+
+  const storageBeforeFail = storage.get('itonami.kaisha.state.v2');
+
+  // Verify reopened reset dialog starts with focus on non-destructive cancel button
+  const failCancelBtn = failDialog.querySelector('[data-approval-cancel]');
+  const failConfirmBtn = failDialog.querySelector('[data-approval-confirm]');
+  if (!failCancelBtn || global.document.activeElement !== failCancelBtn || global.document.activeElement === failConfirmBtn) {
+    throw new Error('Reopened reset dialog initial focus should be on non-destructive cancel button, not confirm button');
+  }
+
+  // Focus confirm button before initiating action
+  failConfirmBtn.focus();
+  if (global.document.activeElement !== failConfirmBtn) {
+    throw new Error('failConfirmBtn could not be focused');
+  }
+
+  // Set simulated save failure and click confirm
+  failNextSet = true;
+  failConfirmBtn.dispatchEvent({ type: 'click' });
+  failNextSet = false;
+
+  // VERIFY: Dialog MUST remain open!
+  const stillOpenDialog = appRoot.querySelector('.dialog');
+  if (!stillOpenDialog) {
+    throw new Error('Dialog closed despite save! failure!');
+  }
+
+  // VERIFY: Focus must be restored inside the still-open dialog (specifically to confirm button)
+  if (!stillOpenDialog.contains(global.document.activeElement)) {
+    throw new Error('Focus was not restored inside the still-open dialog after save! failure');
+  }
+  const currentConfirmBtn = stillOpenDialog.querySelector('[data-approval-confirm]');
+  if (global.document.activeElement !== currentConfirmBtn) {
+    throw new Error('Focus was not restored to the confirm button after save! failure');
+  }
+
+  // VERIFY: Error reason must be displayed inside dialog
+  const failReasonEl = stillOpenDialog.querySelector('[data-approval-reason]');
+  if (!failReasonEl || !failReasonEl.textContent.includes('保存に失敗したため')) {
+    throw new Error(`Expected save failure message in dialog, got: ${failReasonEl?.textContent}`);
+  }
+
+  // VERIFY: Storage remains unchanged
+  if (storage.get('itonami.kaisha.state.v2') !== storageBeforeFail) {
+    throw new Error('Storage was modified despite save! failure!');
+  }
+
+  // VERIFY: Pressing Escape on document.activeElement closes dialog and restores focus to opener
+  global.document.activeElement.dispatchEvent({ type: 'keydown', key: 'Escape', bubbles: true });
+  if (appRoot.querySelector('.dialog')) {
+    throw new Error('Dialog did not close on Escape after save! failure');
+  }
+  const restoredAfterFailEscape = global.document.getElementById('reset-demo-btn');
+  if (!restoredAfterFailEscape || global.document.activeElement !== restoredAfterFailEscape) {
+    throw new Error('Escape after save! failure did not restore focus to reset-demo-btn');
+  }
+  console.log('   save! failure properly kept dialog open, restored focus inside dialog, displayed error, preserved storage, and Escape returned focus to opener.');
+
+  console.log('11. Testing successful Confirm flow for reset...');
+  restoredAfterFailEscape.dispatchEvent({ type: 'click' });
+  const dialogToConfirm = appRoot.querySelector('.dialog');
+  const finalConfirmBtn = dialogToConfirm.querySelector('[data-approval-confirm]');
+  finalConfirmBtn.dispatchEvent({ type: 'click' });
+
+  if (appRoot.querySelector('.dialog')) {
+    throw new Error('Dialog should be closed after successful confirmation');
+  }
+
+  // Storage MUST now be reset to sample data, with officer verify wiped, and exactly 1 audit entry for :data/reset-demo
+  const resetStorage = storage.get('itonami.kaisha.state.v2');
+  if (resetStorage.includes('法務局取得 履歴事項全部証明書 2026-11-20')) {
+    throw new Error('Storage should have wiped verified officer evidence on reset!');
+  }
+  if (!resetStorage.includes(':data/reset-demo')) {
+    throw new Error('Storage does not contain :data/reset-demo audit entry!');
+  }
+  // Check audit count in storage
+  const auditMatch = resetStorage.match(/:audit\s*\[(.*?)\]/s);
+  if (!auditMatch) throw new Error('Could not find :audit in storage');
+  const auditEntries = auditMatch[1].trim();
+  const entryCount = (auditEntries.match(/\{/g) || []).length;
+  if (entryCount !== 1) {
+    throw new Error(`Expected exactly 1 audit entry after reset, found ${entryCount}: ${auditEntries}`);
+  }
+  console.log('   Reset confirmation verified: state restored to fixture, audit has exactly 1 entry for :data/reset-demo.');
+
+  console.log('\nALL UI TESTS PASSED SUCCESSFULLY! (Focus retention, IME safety, Escape, Cancel, Save failure, Confirm, and Reset verified)');
 }
 
 run().catch(err => {

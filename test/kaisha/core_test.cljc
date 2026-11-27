@@ -630,14 +630,16 @@
 (deftest agent-human-only-rejection
   (let [s (app/sample)
         agent-state (assoc s :actor {:actor/id "bot-1" :actor/kind :agent})]
-    (testing "agent による human-only 5 op は dispatch で拒否される"
+    (testing "agent による human-only 6 op は dispatch で拒否される"
       (is (= :human-only (:error (app/dispatch agent-state {:type :ringi/decide :id "r1" :decision :approve}))))
       (is (= :human-only (:error (app/dispatch agent-state {:type :officer/verify :id "yamada" :evidence "証明書"}))))
       (is (= :human-only (:error (app/dispatch agent-state {:type :member/set-permissions :id "takahashi" :permissions [:post]}))))
       (is (= :human-only (:error (app/dispatch agent-state {:type :meeting/vote :id "board-2026-12" :agenda "a1" :vote {:present #{"yamada"} :for #{"yamada"}}}))))
-      (is (= :human-only (:error (app/dispatch agent-state {:type :books/advance :step :prepared})))))
+      (is (= :human-only (:error (app/dispatch agent-state {:type :books/advance :step :prepared}))))
+      (is (= :human-only (:error (app/dispatch agent-state {:type :data/reset-demo})))))
     (testing "拒否された場合 state は一切変更されない"
-      (is (= agent-state (:state (app/dispatch agent-state {:type :officer/verify :id "yamada" :evidence "証明書"})))))
+      (is (= agent-state (:state (app/dispatch agent-state {:type :officer/verify :id "yamada" :evidence "証明書"}))))
+      (is (= agent-state (:state (app/dispatch agent-state {:type :data/reset-demo})))))
     (testing "agent でも起案・提出・チャット投稿は許可される"
       (let [r (app/dispatch agent-state {:type :ringi/create :ringi {:ringi/id "r-bot" :ringi/title "bot起案" :ringi/amount 1000 :ringi/category :ordinary}})]
         (is (nil? (:error r)))
@@ -705,15 +707,152 @@
         (is (nil? (:officer/authority-verified-on o)))
         (is (nil? (:officer/authority-evidence o))))
 
-      ;; 3. 他の 4 つの op についても preview が副作用を持たず、キャンセル時に state を変更しないことを確認
+      ;; 3. 他の 5 つの op についても preview が副作用を持たず、キャンセル時に state を変更しないことを確認
       (let [ops [[:ringi.decide {:id "r1" :decision :approve}]
                  [:member.permissions.set {:id "hanako" :permissions [:approve]}]
                  [:meeting.vote {:id "board-2026-12" :agenda "a1"
                                  :vote {:present #{"yamada" "suzuki"} :for #{"yamada" "suzuki"} :interested #{}}}]
-                 [:books.advance {:step :audited}]]]
+                 [:books.advance {:step :audited}]
+                 [:data.reset-demo {}]]]
         (doseq [[op args] ops]
           (let [prev (approval/preview s op args)]
             (is (map? prev))
             (is (boolean? (:irreversible? prev)))
             (is (boolean? (:human-only? prev)))))
         (is (= s (app/sample)))))))
+
+(deftest approval-preview-reset-counts
+  (testing "空の state に対する reset-preview と approval/preview"
+    (let [empty-counts (app/reset-preview {})
+          p (approval/preview {} :data/reset-demo {})]
+      (is (= 0 (:company empty-counts)))
+      (is (= 0 (:officers empty-counts)))
+      (is (= 0 (:members empty-counts)))
+      (is (= 0 (:meetings empty-counts)))
+      (is (= 0 (:ringi empty-counts)))
+      (is (= 0 (:financials empty-counts)))
+      (is (= 0 (:chat empty-counts)))
+      (is (= 0 (:registrations empty-counts)))
+      (is (= 0 (:procedures empty-counts)))
+      (is (= 0 (:audit empty-counts)))
+      (is (= empty-counts (:counts p)))
+      (is (:allowed? p))
+      (is (:irreversible? p))
+      (is (:human-only? p))))
+
+  (testing "架空データ（sample）に対する reset-preview と approval/preview"
+    (let [s (app/sample)
+          c (app/reset-preview s)
+          p-ja (approval/preview s :data/reset-demo {})
+          p-en (approval/preview s :data/reset-demo {} {:lang :en})]
+      (is (= 1 (:company c)))
+      (is (= 4 (:officers c)))
+      (is (= 5 (:members c)))
+      (is (= 2 (:meetings c)))
+      (is (= 0 (:ringi c)))
+      (is (= 0 (:financials c)))
+      (is (= 0 (:chat c)))
+      (is (= 0 (:registrations c)))
+      (is (= 0 (:procedures c)))
+      (is (= 0 (:audit c)))
+      (is (= c (:counts p-ja)))
+      (is (:allowed? p-ja))
+      (is (nil? (:reason p-ja)))
+      (is (:irreversible? p-ja))
+      (is (:human-only? p-ja))
+      ;; 日英 i18n の effects 検証（全 10 項目）
+      (is (some #(re-find #"架空商事株式会社" %) (:effects p-ja)))
+      (is (some #(re-find #"会社 1件、役員 4件、メンバー 5件、会議 2件、稟議 0件、会計 0件、会話 0件、登記 0件、手続き 0件、旧監査 0件" %) (:effects p-ja)))
+      (is (some #(re-find #"取り消せません" %) (:effects p-ja)))
+      (is (some #(re-find #"Kakū Shōji" %) (:effects p-en)))
+      (is (some #(re-find #"1 company, 4 officers, 5 members, 2 meetings, 0 approvals, 0 accounts, 0 messages, 0 registrations, 0 procedures, 0 old audit logs" %) (:effects p-en)))
+      (is (some #(re-find #"cannot be undone" %) (:effects p-en)))))
+
+  (testing "追加後の state（全項目が1件以上）に対する reset-preview 件数と日英 effects の検証"
+    (let [s0 (app/sample)
+          s1 (:state (app/dispatch s0 {:type :member/add :at "2026-11-26T10:00"
+                                       :member {:member/id "m-new" :member/name "新メンバー" :member/permissions [:post]}}))
+          s2 (:state (app/dispatch s1 {:type :officer/add :at "2026-11-26T10:05"
+                                       :officer {:officer/id "o-new" :officer/name "新役員" :officer/roles [:director] :officer/elected-on "2026-11-20"}}))
+          s3 (:state (app/dispatch s2 {:type :meeting/add :at "2026-11-26T10:10"
+                                       :meeting {:meeting/id "m-new" :meeting/body :board :meeting/title "臨時会" :meeting/date "2026-12-20" :meeting/agenda []}}))
+          s4 (:state (app/dispatch s3 {:type :ringi/create :at "2026-11-26T10:15"
+                                       :ringi {:ringi/id "r-new" :ringi/title "新規稟議" :ringi/amount 50000 :ringi/category :ordinary}}))
+          s5 (:state (app/dispatch s4 {:type :books/import :at "2026-11-26T10:20" :csv tb}))
+          s6 (:state (app/dispatch s5 {:type :books/advance :at "2026-11-26T10:25" :step :prepared}))
+          s7 (:state (app/dispatch s6 {:type :chat/post :at "2026-11-26T10:30" :channel "general" :body "連絡事項です"}))
+          s8 (:state (app/dispatch s7 {:type :procedure/head-office-move :at "2026-11-26T10:35"
+                                       :id "proc-1" :to {:country :jp :subdivision :jp.fixture/city-b} :moved-on "2026-12-01"}))
+          counts (app/reset-preview s8)
+          p-ja (approval/preview s8 :data/reset-demo {})
+          p-en (approval/preview s8 :data/reset-demo {} {:lang :en})]
+      ;; 各項目が 1 件以上存在することの確認
+      (is (pos? (:company counts)))
+      (is (pos? (:officers counts)))
+      (is (pos? (:members counts)))
+      (is (pos? (:meetings counts)))
+      (is (pos? (:ringi counts)))
+      (is (pos? (:financials counts)))
+      (is (pos? (:chat counts)))
+      (is (pos? (:registrations counts)))
+      (is (pos? (:procedures counts)))
+      (is (pos? (:audit counts)))
+      (is (= 1 (:company counts)))
+      (is (= 5 (:officers counts)) "4 -> 5")
+      (is (= 6 (:members counts)) "5 -> 6")
+      (is (= 3 (:meetings counts)) "2 -> 3")
+      (is (= 1 (:ringi counts)) "0 -> 1")
+      (is (= 1 (:financials counts)) "0 -> 1")
+      (is (= 1 (:chat counts)) "0 -> 1")
+      (is (= 1 (:registrations counts)) "officer/add による就任登記が自動追加")
+      (is (= 1 (:procedures counts)) "0 -> 1")
+      (is (= 8 (:audit counts)) "各操作（8回の dispatch）による監査記録が蓄積")
+      (is (= counts (:counts p-ja)))
+      ;; 日英両方の承認カード effects に全項目の消去件数が表示されること
+      (is (some #(re-find #"会社 1件、役員 5件、メンバー 6件、会議 3件、稟議 1件、会計 1件、会話 1件、登記 1件、手続き 1件、旧監査 8件" %) (:effects p-ja)))
+      (is (some #(re-find #"1 company, 5 officers, 6 members, 3 meetings, 1 approvals, 1 accounts, 1 messages, 1 registrations, 1 procedures, 8 old audit logs" %) (:effects p-en))))))
+
+(deftest reset-demo-dispatch-and-audit
+  (testing "リセット実行で state は sample に戻り、audit は 1 行のみ残り、リセット前 actor と一致する"
+    (let [s0 (app/sample)
+          ;; 操作者を yamada（human）に切り替え
+          s1 (:state (app/dispatch s0 {:type :session/as :member "yamada"}))
+          ;; 複数操作を実行して state と audit を増やす
+          s2 (:state (app/dispatch s1 {:type :member/add :at "2026-11-26T11:00"
+                                       :member {:member/id "m-extra" :member/name "追加者" :member/permissions [:post]}}))
+          s3 (:state (app/dispatch s2 {:type :officer/verify :id "yamada" :on "2026-11-20" :at "2026-11-26T11:05"
+                                       :evidence "登記事項証明書確認"}))
+          s4 (:state (app/dispatch s3 {:type :chat/post :channel "general" :body "リセット前テスト" :at "2026-11-26T11:10"}))]
+      ;; リセット前検証
+      (is (< 1 (count (:audit s4))))
+      (is (= 6 (count (get-in s4 [:company :company/members]))))
+      (is (some? (:officer/authority-verified-on (app/find-by :officer/id "yamada" (get-in s4 [:company :company/officers])))))
+      ;; リセット実行
+      (let [res (app/dispatch s4 {:type :data/reset-demo :at "2026-11-26T12:00"})
+            next-state (:state res)]
+        (is (nil? (:error res)))
+        (is (app/valid-state? next-state) "スキーマ v2 の整合性を維持")
+        (is (= app/schema (:schema next-state)))
+        ;; データが sample に戻っていること
+        (is (= (:company (app/sample)) (:company next-state)))
+        (is (= (:meetings (app/sample)) (:meetings next-state)))
+        (is (= (:ringi (app/sample)) (:ringi next-state)))
+        (is (= (:financials (app/sample)) (:financials next-state)))
+        (is (= (:space (app/sample)) (:space next-state)))
+        (is (= (:procedures (app/sample)) (:procedures next-state)))
+        ;; 監査は消える前のものは残らず、1 行のみ残ること
+        (is (= 1 (count (:audit next-state))))
+        (let [entry (first (:audit next-state))]
+          (is (= :data/reset-demo (:type entry)))
+          (is (= "yamada" (:actor entry)) "リセット前の actor/id と一致")
+          (is (= :human (:kind entry)) "リセット前の actor/kind と一致")
+          (is (= "2026-11-26T12:00" (:at entry)))))))
+
+  (testing "agent による :data/reset-demo は拒否され、state・audit は一切変わらない"
+    (let [s (app/sample)
+          agent-state (assoc s :actor {:actor/id "bot-admin" :actor/kind :agent})
+          res (app/dispatch agent-state {:type :data/reset-demo :at "2026-11-26T12:00"})]
+      (is (= :human-only (:error res)))
+      (is (= agent-state (:state res)))
+      (is (= (:audit s) (get-in res [:state :audit]))))))
+
